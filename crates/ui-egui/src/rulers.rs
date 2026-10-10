@@ -171,18 +171,23 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
             styled_line(painter, pos2(clip.left(), y), pos2(clip.right(), y), Stroke::new(1.0, color), style);
         }
     };
+    // A guide given a colour in New Guide keeps it; the rest use the preference colour (or, while
+    // New Guide Layout previews, the colour it will set).
+    let own = |vertical: bool, p: f64| guides.color(vertical, p).map_or(guide, |[r, g, b]| Color32::from_rgb(r, g, b));
     if app.ui.extras.guides || preview.is_some() {
         for (vertical, list) in [(true, &guides.vertical), (false, &guides.horizontal)] {
             for (i, p) in list.iter().enumerate() {
                 if drag.is_some_and(|d| d.vertical == vertical && d.index == Some(i)) {
                     continue;
                 }
-                line(vertical, *p, guide);
+                line(vertical, *p, own(vertical, *p));
             }
         }
     }
     if let Some(d) = drag {
-        line(d.vertical, d.pos, guide);
+        // A guide being moved shows its own colour; a new one dragged from a ruler the preference's.
+        let list = if d.vertical { &doc.guides.vertical } else { &doc.guides.horizontal };
+        line(d.vertical, d.pos, d.index.and_then(|i| list.get(i)).map_or(guide, |p| own(d.vertical, *p)));
     }
 }
 

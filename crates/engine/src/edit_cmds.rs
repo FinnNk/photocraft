@@ -620,10 +620,37 @@ fn guide_position(s: &Session, p: &Value, vertical: bool) -> Result<Option<f64>>
     Ok(Some(px))
 }
 
+/// The colours of View › Guides › New Guide… › Color, by the names `view.newGuide` takes, with the
+/// label each shows. Values approximate Photoshop's on screen (rounded to web-safe steps), except
+/// Cyan, which is the default guide colour in Preferences, so a guide dragged from a ruler shows as
+/// Cyan when it's edited.
+pub const GUIDE_COLORS: [(&str, &str, [u8; 3]); 9] = [
+    ("lightBlue", "Light Blue", [0x33, 0x66, 0xff]),
+    ("lightRed", "Light Red", [0xff, 0x33, 0x33]),
+    ("green", "Green", [0x33, 0xff, 0x33]),
+    ("mediumBlue", "Medium Blue", [0x33, 0x33, 0xff]),
+    ("yellow", "Yellow", [0xff, 0xff, 0x33]),
+    ("magenta", "Magenta", [0xff, 0x33, 0xff]),
+    ("cyan", "Cyan", [0x4a, 0xff, 0xff]),
+    ("lightGray", "Light Gray", [0xe7, 0xe7, 0xe7]),
+    ("black", "Black", [0x00, 0x00, 0x00]),
+];
+
+/// A guide `color`: one of [`GUIDE_COLORS`]' names or `"#rrggbb"`. `None` when there is no `color`
+/// (the guide uses Preferences › Guides, Grid & Slices › Guide colour).
+fn guide_color(p: &Value) -> Result<Option<[u8; 3]>> {
+    let Some(v) = p.get("color") else { return Ok(None) };
+    let text = v.as_str().ok_or(EngineError::Other("`color` must be a colour name or \"#rrggbb\"".into()))?;
+    GUIDE_COLORS.iter().find(|(name, ..)| name.eq_ignore_ascii_case(text)).map(|(.., rgb)| *rgb).or_else(|| crate::prefs::parse_hex(text)).map(Some).ok_or_else(
+        || EngineError::Other(format!("`color` {text:?} is not a guide colour: use \"#rrggbb\" or one of {}", GUIDE_COLORS.map(|c| c.0).join(", "))),
+    )
+}
+
 /// View › New Guide / guide moves (undoable, like Photoshop's "New Guide"/"Move Guide" states).
 fn guide_cmd(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
     let vertical = p.get("orientation").and_then(Value::as_str).unwrap_or("horizontal") == "vertical";
     let pos = guide_position(s, p, vertical)?;
+    let color = if op == "new" { guide_color(p)? } else { None };
     let index = p.get("index").and_then(Value::as_u64).map(|v| v as usize);
     let label = match op {
         "new" => "New Guide",
@@ -632,20 +659,35 @@ fn guide_cmd(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
         _ => "Clear Guides",
     };
     s.edit(label, |doc, _| {
-        let g = if vertical { &mut doc.guides.vertical } else { &mut doc.guides.horizontal };
+        let guides = &mut doc.guides;
+        let g = if vertical { &mut guides.vertical } else { &mut guides.horizontal };
         match op {
-            "new" => g.push(pos.ok_or(EngineError::Other("missing `position`".into()))?),
+            "new" => {
+                let at = pos.ok_or(EngineError::Other("missing `position`".into()))?;
+                g.push(at);
+                if color.is_some() {
+                    guides.set_color(vertical, at, color);
+                }
+            }
             "move" => {
                 let i = index.filter(|i| *i < g.len()).ok_or(EngineError::Other("no such guide".into()))?;
-                g[i] = pos.ok_or(EngineError::Other("missing `position`".into()))?;
+                let to = pos.ok_or(EngineError::Other("missing `position`".into()))?;
+                let from = std::mem::replace(&mut g[i], to);
+                // The guide takes its colour along; another guide left at the old position keeps it.
+                if let Some(rgb) = guides.color(vertical, from) {
+                    guides.set_color(vertical, to, Some(rgb));
+                }
+                guides.prune_colors();
             }
             "delete" => {
                 let i = index.filter(|i| *i < g.len()).ok_or(EngineError::Other("no such guide".into()))?;
                 g.remove(i);
+                guides.prune_colors();
             }
             _ => {
-                doc.guides.horizontal.clear();
-                doc.guides.vertical.clear();
+                guides.horizontal.clear();
+                guides.vertical.clear();
+                guides.colors.clear();
             }
         }
         Ok(())
@@ -733,7 +775,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Guide…",
             &["View"],
             None,
-            r##"{"orientation":"horizontal|vertical","position":px or "<number><unit>"} (units px, in, cm, mm, pt, pc or %; % is of the width for a vertical guide, the height for a horizontal one)"##,
+            r##"{"orientation":"horizontal|vertical","position":px or "<number><unit>","color":"lightBlue|lightRed|green|mediumBlue|yellow|magenta|cyan|lightGray|black" or "#rrggbb"?} (units px, in, cm, mm, pt, pc or %; % is of the width for a vertical guide, the height for a horizontal one; without a color the guide uses the guide colour in Preferences)"##,
             has_doc,
             |s, p| guide_cmd(s, p, "new")
         ),
@@ -1475,6 +1517,67 @@ mod tests {
         // A guide moved with a unit lands where a new one would.
         s.execute("view.moveGuide", json!({"orientation": "horizontal", "index": 0, "position": "25%"})).unwrap();
         assert_eq!(s.active().unwrap().doc.guides.horizontal[0], 50.0);
+    }
+
+    #[test]
+    fn new_guides_keep_their_own_colour_through_moves_deletes_and_undo() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
+        let color = |s: &Session, vertical: bool, p: f64| s.active().unwrap().doc.guides.color(vertical, p);
+        // Without a colour a guide uses the preference colour, as ruler-drag guides always did.
+        s.execute("view.newGuide", json!({"orientation": "vertical", "position": 10})).unwrap();
+        assert_eq!(color(&s, true, 10.0), None);
+        assert!(s.active().unwrap().doc.guides.colors.is_empty());
+        s.execute("view.newGuide", json!({"orientation": "vertical", "position": 20, "color": "magenta"})).unwrap();
+        s.execute("view.newGuide", json!({"orientation": "horizontal", "position": 20, "color": "#123456"})).unwrap();
+        s.execute("view.newGuide", json!({"orientation": "vertical", "position": 30, "color": "LightBlue"})).unwrap();
+        assert_eq!(color(&s, true, 20.0), Some([0xff, 0x33, 0xff]));
+        assert_eq!(color(&s, false, 20.0), Some([0x12, 0x34, 0x56]), "the same position across is a different guide");
+        assert_eq!(color(&s, true, 30.0), Some([0x33, 0x66, 0xff]), "names are case-insensitive");
+        // Moving takes the colour along.
+        s.execute("view.moveGuide", json!({"orientation": "vertical", "index": 1, "position": 25})).unwrap();
+        assert_eq!((color(&s, true, 20.0), color(&s, true, 25.0)), (None, Some([0xff, 0x33, 0xff])));
+        // Undo restores it where it was.
+        s.undo();
+        assert_eq!((color(&s, true, 20.0), color(&s, true, 25.0)), (Some([0xff, 0x33, 0xff]), None));
+        // Deleting drops it; clearing drops them all.
+        s.execute("view.deleteGuide", json!({"orientation": "vertical", "index": 2})).unwrap();
+        assert_eq!(color(&s, true, 30.0), None);
+        assert_eq!(s.active().unwrap().doc.guides.colors.len(), 2);
+        s.execute("view.clearGuides", json!({})).unwrap();
+        assert!(s.active().unwrap().doc.guides.colors.is_empty());
+    }
+
+    #[test]
+    fn moving_one_of_two_coloured_guides_at_one_position_leaves_the_other_its_colour() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
+        for _ in 0..2 {
+            s.execute("view.newGuide", json!({"orientation": "vertical", "position": 50, "color": "green"})).unwrap();
+        }
+        s.execute("view.moveGuide", json!({"orientation": "vertical", "index": 0, "position": 60})).unwrap();
+        let g = &s.active().unwrap().doc.guides;
+        assert_eq!((g.color(true, 50.0), g.color(true, 60.0)), (Some([0x33, 0xff, 0x33]), Some([0x33, 0xff, 0x33])));
+    }
+
+    #[test]
+    fn cyan_is_the_default_guide_colour_so_ruler_guides_read_as_cyan() {
+        let default = crate::prefs::Preferences::default().guides_grid_and_slices.guide_color;
+        let cyan = GUIDE_COLORS.iter().find(|(name, ..)| *name == "cyan").map(|(.., rgb)| *rgb);
+        assert_eq!(cyan, crate::prefs::parse_hex(&default));
+    }
+
+    #[test]
+    fn bad_guide_colours_are_refused_without_a_guide() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
+        let undo_before = s.active().unwrap().history.can_undo();
+        for bad in [json!("puce"), json!("#12345"), json!("#gggggg"), json!(""), json!(7), json!(null), json!(["cyan"])] {
+            assert!(s.execute("view.newGuide", json!({"orientation": "vertical", "position": 10, "color": bad.clone()})).is_err(), "{bad}");
+        }
+        let g = &s.active().unwrap().doc.guides;
+        assert!(g.vertical.is_empty() && g.colors.is_empty());
+        assert_eq!(s.active().unwrap().history.can_undo(), undo_before);
     }
 
     #[test]

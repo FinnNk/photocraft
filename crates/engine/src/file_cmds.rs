@@ -1313,6 +1313,7 @@ fn clear_canvas_guides(s: &mut Session) -> Result<Value> {
     s.edit("Clear Canvas Guides", |doc, _| {
         doc.guides.vertical.retain(|x| in_x(*x));
         doc.guides.horizontal.retain(|y| in_y(*y));
+        doc.guides.prune_colors();
         Ok(())
     })?;
     Ok(json!({"cleared": n}))
