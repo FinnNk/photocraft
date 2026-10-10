@@ -592,10 +592,38 @@ fn transform_again_params(s: &Session) -> Result<Value> {
     Ok(p)
 }
 
+/// Guides further than this from the canvas origin are refused: far past any document (300000 px)
+/// yet well within f32 precision.
+const MAX_GUIDE_PX: f64 = 1_000_000.0;
+
+/// A guide `position` in document pixels: a number of pixels, or text with a unit as in Photoshop's
+/// New Guide dialog ("50%", "2.5 cm", "12 pt"). Percent is of the document's width for a vertical
+/// guide and its height for a horizontal one; points and picas follow Units & Rulers › Point Size.
+/// `None` when there is no `position`.
+fn guide_position(s: &Session, p: &Value, vertical: bool) -> Result<Option<f64>> {
+    let Some(v) = p.get("position") else { return Ok(None) };
+    let px = match (v.as_f64(), v.as_str()) {
+        (Some(n), _) => n,
+        (None, Some(text)) => {
+            let (n, unit) = crate::prefs::Unit::parse_length(text).ok_or_else(|| {
+                EngineError::Other(format!("`position` {text:?} is not a length: give a number of pixels, or a number with px, in, cm, mm, pt, pc or %"))
+            })?;
+            let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+            let extent = if vertical { doc.size.width } else { doc.size.height };
+            unit.unwrap_or(crate::prefs::Unit::Pixels).to_px(n, doc.resolution_dpi as f64, extent as f64, s.prefs().units_and_rulers.point_size.per_inch())
+        }
+        _ => return Err(EngineError::Other("`position` must be a number of pixels or text with a unit".into())),
+    };
+    if !px.is_finite() || px.abs() > MAX_GUIDE_PX {
+        return Err(EngineError::Other(format!("`position` is out of range (at most {MAX_GUIDE_PX} px from the canvas origin)")));
+    }
+    Ok(Some(px))
+}
+
 /// View › New Guide / guide moves (undoable, like Photoshop's "New Guide"/"Move Guide" states).
 fn guide_cmd(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
     let vertical = p.get("orientation").and_then(Value::as_str).unwrap_or("horizontal") == "vertical";
-    let pos = p.get("position").and_then(Value::as_f64);
+    let pos = guide_position(s, p, vertical)?;
     let index = p.get("index").and_then(Value::as_u64).map(|v| v as usize);
     let label = match op {
         "new" => "New Guide",
@@ -700,12 +728,24 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             |s, _| transform_again_copy(s)
         ),
-        spec!("view.newGuide", "New Guide…", &["View"], None, r##"{"orientation":"horizontal|vertical","position":px}"##, has_doc, |s, p| guide_cmd(
-            s, p, "new"
-        )),
-        spec!("view.moveGuide", "Move Guide", &[], None, r##"{"orientation":"horizontal|vertical","index":n,"position":px}"##, has_doc, |s, p| guide_cmd(
-            s, p, "move"
-        )),
+        spec!(
+            "view.newGuide",
+            "New Guide…",
+            &["View"],
+            None,
+            r##"{"orientation":"horizontal|vertical","position":px or "<number><unit>"} (units px, in, cm, mm, pt, pc or %; % is of the width for a vertical guide, the height for a horizontal one)"##,
+            has_doc,
+            |s, p| guide_cmd(s, p, "new")
+        ),
+        spec!(
+            "view.moveGuide",
+            "Move Guide",
+            &[],
+            None,
+            r##"{"orientation":"horizontal|vertical","index":n,"position":px or "<number><unit>"} (units as for view.newGuide)"##,
+            has_doc,
+            |s, p| guide_cmd(s, p, "move")
+        ),
         spec!("view.deleteGuide", "Delete Guide", &[], None, r##"{"orientation":"horizontal|vertical","index":n}"##, has_doc, |s, p| guide_cmd(s, p, "delete")),
         spec!("view.clearGuides", "Clear Guides", &["View"], None, "{}", has_doc, |s, p| guide_cmd(s, p, "clear")),
     ]
@@ -1405,6 +1445,62 @@ mod tests {
         s.execute("view.clearGuides", json!({})).unwrap();
         assert!(s.active().unwrap().doc.guides.vertical.is_empty());
         assert!(s.execute("view.moveGuide", json!({"orientation": "vertical", "index": 3, "position": 1})).is_err());
+    }
+
+    /// The last guide added in `orientation` for `position`.
+    fn new_guide(s: &mut Session, orientation: &str, position: Value) -> f64 {
+        s.execute("view.newGuide", json!({"orientation": orientation, "position": position})).unwrap();
+        let g = &s.active().unwrap().doc.guides;
+        *if orientation == "vertical" { &g.vertical } else { &g.horizontal }.last().unwrap()
+    }
+
+    #[test]
+    fn guide_positions_take_photoshop_units() {
+        let mut s = Session::new();
+        // 4 × 2 inches at 100 ppi.
+        s.execute("file.new", json!({"width": 400, "height": 200, "resolution": 100})).unwrap();
+        // Percent follows the guide's own axis: the width for a vertical guide, the height for a horizontal one.
+        assert_eq!(new_guide(&mut s, "vertical", json!("50%")), 200.0);
+        assert_eq!(new_guide(&mut s, "horizontal", json!("50%")), 100.0);
+        for one_inch in ["1in", "1 in", "2.54cm", "25.4 mm", "72pt", "6pc", "100px", "100", "1,0 inch"] {
+            assert!((new_guide(&mut s, "vertical", json!(one_inch)) - 100.0).abs() < 1e-3, "{one_inch}");
+        }
+        // Fractional and negative positions are kept; a plain number is pixels, as before.
+        assert_eq!(new_guide(&mut s, "horizontal", json!("12.5px")), 12.5);
+        assert_eq!(new_guide(&mut s, "vertical", json!("-10px")), -10.0);
+        assert_eq!(new_guide(&mut s, "vertical", json!(40)), 40.0);
+        // Points and picas follow Units & Rulers › Point Size.
+        s.execute("prefs.set", json!({"path": "unitsAndRulers.pointSize", "value": "traditional"})).unwrap();
+        assert!((new_guide(&mut s, "vertical", json!("72.27pt")) - 100.0).abs() < 1e-3);
+        // A guide moved with a unit lands where a new one would.
+        s.execute("view.moveGuide", json!({"orientation": "horizontal", "index": 0, "position": "25%"})).unwrap();
+        assert_eq!(s.active().unwrap().doc.guides.horizontal[0], 50.0);
+    }
+
+    #[test]
+    fn bad_guide_positions_are_refused_without_a_guide() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 200, "resolution": 100})).unwrap();
+        let undo_before = s.active().unwrap().history.can_undo();
+        for bad in [
+            json!("abc"),
+            json!("50 furlongs"),
+            json!(""),
+            json!("%"),
+            json!("NaN"),
+            json!("inf"),
+            json!("1e400"),
+            json!("2000000px"),
+            json!(1e300),
+            json!(true),
+            json!([1]),
+        ] {
+            assert!(s.execute("view.newGuide", json!({"orientation": "vertical", "position": bad.clone()})).is_err(), "{bad}");
+        }
+        assert!(s.execute("view.newGuide", json!({"orientation": "vertical"})).is_err(), "no position");
+        let g = &s.active().unwrap().doc.guides;
+        assert!(g.vertical.is_empty() && g.horizontal.is_empty());
+        assert_eq!(s.active().unwrap().history.can_undo(), undo_before, "a refused guide records no history step");
     }
 
     /// Guides keep their exact place (#2918): 1 cm at 300 ppi through New Guide and .pcraft, and

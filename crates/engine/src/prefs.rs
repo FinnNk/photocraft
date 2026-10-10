@@ -160,6 +160,31 @@ impl Unit {
             Unit::Inches => 3,
         }
     }
+    /// A length as typed in Photoshop's numeric fields: a number with an optional unit suffix
+    /// ("50%", "2.5 cm", "12pt", "3pc", "1,5 in", "100"). Returns the number and its unit (`None`
+    /// when there is no suffix, so the caller picks the default), or `None` if the text is not a
+    /// finite number followed by a known unit.
+    pub fn parse_length(text: &str) -> Option<(f64, Option<Unit>)> {
+        let t = text.trim();
+        let end = t.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | ',' | '-' | '+'))).unwrap_or(t.len());
+        let (number, suffix) = t.split_at(end);
+        let v: f64 = number.trim().replace(',', ".").parse().ok()?;
+        if !v.is_finite() {
+            return None;
+        }
+        let unit = match suffix.trim().to_ascii_lowercase().as_str() {
+            "" => None,
+            "px" | "pixel" | "pixels" => Some(Unit::Pixels),
+            "in" | "inch" | "inches" | "\"" => Some(Unit::Inches),
+            "cm" | "centimeter" | "centimeters" | "centimetre" | "centimetres" => Some(Unit::Centimeters),
+            "mm" | "millimeter" | "millimeters" | "millimetre" | "millimetres" => Some(Unit::Millimeters),
+            "pt" | "point" | "points" => Some(Unit::Points),
+            "pc" | "pica" | "picas" => Some(Unit::Picas),
+            "%" | "percent" => Some(Unit::Percent),
+            _ => return None,
+        };
+        Some((v, unit))
+    }
 }
 
 impl PointSize {
