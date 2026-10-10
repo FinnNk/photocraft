@@ -3657,3 +3657,9 @@ cameraData	Lens	Об'єктив
 	There is no crop size or ratio to save	Немає розміру чи співвідношення сторін кадрування для збереження
 	Scale:	Масштаб:
 	Snap to Origin	Прив'язати до початку координат
+
+# View › Guides › New Guide… › Color
+	Light Blue	Світло-синій
+	Light Red	Світло-червоний
+	Medium Blue	Середньо-синій
+	Light Gray	Світло-сірий

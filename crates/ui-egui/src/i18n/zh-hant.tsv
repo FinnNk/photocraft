@@ -2540,3 +2540,9 @@ cameraData	Lens	鏡頭
 	Select the crop presets to delete	選取要刪除的裁切預設集
 	Enter a name for the crop preset	輸入裁切預設集的名稱
 	There is no crop size or ratio to save	沒有可儲存的裁切尺寸或比例
+
+# View › Guides › New Guide… › Color
+	Light Blue	淺藍色
+	Light Red	淺紅色
+	Medium Blue	中藍色
+	Light Gray	淺灰色

@@ -116,6 +116,7 @@ pub mod move_mods;
 pub mod move_ui;
 pub mod native_menu;
 pub mod new_doc_ui;
+pub mod new_guide_ui;
 pub mod notices;
 mod numeric_expression;
 mod opacity_keys;

@@ -2901,3 +2901,9 @@ cameraData	Lens	Объектив
 	Select the crop presets to delete	Выберите наборы параметров кадрирования для удаления
 	Enter a name for the crop preset	Введите имя набора параметров кадрирования
 	There is no crop size or ratio to save	Нет размера или соотношения сторон кадрирования для сохранения
+
+# View › Guides › New Guide… › Color
+	Light Blue	Светло-синий
+	Light Red	Светло-красный
+	Medium Blue	Средне-синий
+	Light Gray	Светло-серый
