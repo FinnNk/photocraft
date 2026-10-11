@@ -1270,6 +1270,10 @@ mod multi_layer_formatting {
             app,
         );
         PhotocraftApp::setup_context(&h.ctx, Default::default());
+        // The font list's search field takes focus, and a blinking caret keeps requesting repaints:
+        // in full parallel runs `run` then exceeded its step limit (6 of 10 full runs failed, none
+        // of 10 with the caret steady). These tests check formatting, not the blink.
+        h.ctx.all_styles_mut(|s| s.visuals.text_cursor.blink = false);
         h.run_steps(4);
         h
     }
