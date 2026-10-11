@@ -2572,6 +2572,12 @@ cameraData	Lens	Objektiv
 	Show Edge	Zobrazit okraj
 	Show Original	Zobrazit originál
 	F cycles the views; hold X to see the image	F přepíná zobrazení; podržením X uvidíte obraz
+# Select and Mask Refine Edge Brush (#2972)
+	Refine Edge Brush (R)	Štětec pro upřesnění okraje (R)
+	Expand Detection Area	Rozšířit oblast detekce
+	Restore Original Edge	Obnovit původní okraj
+	Paint over hair or fur on the image; Alt paints the other mode	Malujte přes vlasy nebo srst v obraze; Alt maluje v opačném režimu
+	Clear Brush Strokes	Vymazat tahy štětce
 	Show rulers	Zobrazit pravítka
 
 # Color Sampler (added with the i18n coverage repair)

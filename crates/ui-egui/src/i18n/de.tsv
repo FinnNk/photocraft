@@ -2603,6 +2603,12 @@ cameraData	Lens	Objektiv
 	Show Edge	Kante anzeigen
 	Show Original	Original anzeigen
 	F cycles the views; hold X to see the image	F wechselt die Ansicht; X gedrückt halten zeigt das Bild
+# Select and Mask Refine Edge Brush (#2972)
+	Refine Edge Brush (R)	Kante-verbessern-Pinsel (R)
+	Expand Detection Area	Erkennungsbereich erweitern
+	Restore Original Edge	Ursprüngliche Kante wiederherstellen
+	Paint over hair or fur on the image; Alt paints the other mode	Über Haare oder Fell im Bild malen; Alt malt im anderen Modus
+	Clear Brush Strokes	Pinselstriche löschen
 	Show rulers	Lineale anzeigen
 
 # Color Sampler (added with the i18n coverage repair)
