@@ -2992,3 +2992,7 @@ curves	Smooth	Сгладить
 	Light Red	Светло-красный
 	Medium Blue	Средне-синий
 	Light Gray	Светло-серый
+
+# View › Guides › right-click a guide
+	Edit Selected Guides	Изменить выбранные направляющие
+	Clear Selected Guides	Удалить выбранные направляющие

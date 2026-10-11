@@ -1084,6 +1084,9 @@ pub struct UiState {
     /// Selection-tool context menu opened by a plain canvas right-click.
     #[serde(default)]
     pub canvas_tool_menu: Option<crate::canvas_tool_menu::CanvasToolMenu>,
+    /// The guide a Move-tool click selected (`guide_select`): drawn blue, Delete removes it.
+    #[serde(default)]
+    pub selected_guide: Option<crate::guide_select::SelectedGuide>,
     /// The brush is a per-tool option (the Brush, the Eraser and every retouching tool each keep
     /// their own size, hardness, tip and dynamics, as in Photoshop): the tool whose brush the
     /// session brush holds, and the other tools' saved brushes.
@@ -1248,6 +1251,7 @@ impl Default for UiState {
             brush_picker_size: None,
             layer_menu: None,
             canvas_tool_menu: None,
+            selected_guide: None,
             brush_tool: Tool::Brush,
             tool_brushes: Vec::new(),
             clone_source: None,
