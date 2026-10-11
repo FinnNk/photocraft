@@ -1569,6 +1569,7 @@
 	Quick Selection Tool	Інструмент «Швидке виділення»
 	Object Selection Tool	Інструмент «Виділення об'єкта»
 	Pen Tool	Інструмент «Перо»
+	Convert Point Tool	Інструмент «Перетворення вузла»
 	Path Selection Tool	Інструмент «Виділення контуру»
 	Direct Selection Tool	Інструмент «Пряме виділення»
 	Add Anchor Point Tool	Інструмент «Додати вузол»
@@ -3644,6 +3645,15 @@ cameraData	Lens	Об'єктив
 	Search settings…	Пошук налаштувань…
 	No matching settings	Немає відповідних налаштувань
 	PhotoCraft — Screen Color Picker	PhotoCraft — Піпетка кольору екрана
+# Select and Mask view modes (#1754)
+	Onion Skin	Калька
+	Marching Ants	Мурашки
+	On Black	На чорному
+	On White	На білому
+	On Layers	На шарах
+	Show Edge	Показати край
+	Show Original	Показати початкове
+	F cycles the views; hold X to see the image	F перемикає види; утримуйте X, щоб побачити зображення
 	Show rulers	Показати лінійки
 	Frame Tool	Інструмент «Рамка»
 	Create a new rectangular frame	Створити прямокутну рамку
@@ -3658,6 +3668,10 @@ cameraData	Lens	Об'єктив
 	Scale:	Масштаб:
 	Snap to Origin	Прив'язати до початку координат
 
+# Color Sampler (added with the i18n coverage repair)
+	Click to place · Alt-click or drag off-canvas to remove	Клацніть, щоб розмістити · Alt-клацання або перетягування за межі полотна для видалення
+	No document open	Документ не відкрито
+	{n} of {max} sample points	{n} з {max} точок вимірювання
 # View › Guides › New Guide… › Color
 	Light Blue	Світло-синій
 	Light Red	Світло-червоний
