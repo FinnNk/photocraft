@@ -507,6 +507,12 @@
 	Color Range…	顏色範圍…
 	Focus Area…	焦點區域…
 	Select and Mask…	選取並遮住…
+# Select and Mask dialog labels
+	Smart Radius	智慧型半徑
+	Shift Edge	移動邊緣
+	Decontaminate	淨化
+	Output	輸出
+	Refine Edge	調整邊緣
 	Modify	修改
 	Border…	邊界…
 	Smooth…	平滑…
@@ -775,6 +781,7 @@
 	Split Warp Horizontally	水平分割彎曲
 	Split Warp Vertically	垂直分割彎曲
 	Statistics…	統計資料…
+	Refine Strokes	調整筆畫
 @plural	{n} item|{n} items	{n} 個項目
 	Auto	自動
 	(print to the printer)	(列印至印表機)
@@ -2191,6 +2198,8 @@ cameraRaw	Blending	混合
 	Patch Tool	修補工具
 	Patch:	修補：
 	Lasso around an area, then drag the selection	用套索圈出區域，然後拖曳選取範圍
+	Transform On Drop	放下時變形
+	Scale or rotate the moved area, then press {key}	縮放或旋轉移動的區域，然後按 {key}
 	Now drag the selection onto another area	現在將選取範圍拖曳到另一個區域
 	Edit Type	編輯文字
 
@@ -2533,12 +2542,28 @@ cameraData	Lens	鏡頭
 	Freeform Pen Tool	自由筆型工具
 	Curvature Pen Tool	曲線筆工具
 	Curve Fit:	曲線擬合：
-	Drag: draw freehand · Release on the start point: close	拖曳：手繪 · 在起點放開：閉合
+	Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close	拖曳：手繪 · {alt}-按一下：直線段 · 在起點放開：閉合
 	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	按一下：平滑點 · 按兩下：轉角 · 拖曳點：移動 · 按一下第一點：閉合 · {key} 完成
 	Scale:	縮放：
 	Snap to Origin	靠齊原點
 	Search settings…	搜尋設定…
 	No matching settings	沒有符合的設定
+	Loading fonts…	正在載入字體…
+	Tool	工具
+	Simulate Pressure	模擬壓力
+	Stroke Path…	筆畫路徑…
+	Background Eraser	背景橡皮擦
+	Clone Stamp	仿製印章
+	Healing Brush	修復筆刷
+	Spot Healing Brush	污點修復筆刷
+	History Brush	步驟記錄筆刷
+	Smudge	指尖
+	Dodge	加亮
+	Burn	加深
+	Sponge	海綿
+	Amount:	總量：
+	Protect:	保護：
+	Protect skin tones	保護膚色
 # Select and Mask view modes (#1754)
 	Onion Skin	洋蔥皮
 	Marching Ants	螞蟻線
@@ -2570,6 +2595,11 @@ cameraData	Lens	鏡頭
 	Emulsion Down	感光乳劑面朝下
 	Functions	功能
 	Print Resolution:	列印解析度：
+	Use Previous Layer to Create Clipping Mask	使用上一個圖層建立剪裁遮色片
+	Fill with {mode}-neutral color (white)	使用{mode}中性色填滿（白色）
+	Fill with {mode}-neutral color (black)	使用{mode}中性色填滿（黑色）
+	Fill with {mode}-neutral color (50% gray)	使用{mode}中性色填滿（50% 灰色）
+	(No neutral color exists for {mode} mode.)	（{mode}模式沒有中性色。）
 # View › Guides › New Guide… › Color
 	Light Blue	淺藍色
 	Light Red	淺紅色

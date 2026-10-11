@@ -230,6 +230,12 @@
 	Mask All Objects	Απόκρυψη όλων των αντικειμένων με μάσκα
 	Update All Text Layers	Ενημέρωση όλων των επιπέδων κειμένου
 	Select and Mask…	Επιλογή και μάσκα…
+# Select and Mask dialog labels
+	Smart Radius	Έξυπνη ακτίνα
+	Shift Edge	Μετατόπιση άκρης
+	Decontaminate	Απομάκρυνση επιμόλυνσης
+	Refine Edge	Βελτίωση άκρης
+	Apply At Canvas Bounds	Εφαρμογή στα όρια του καμβά
 	Edit in Quick Mask Mode	Επεξεργασία σε λειτουργία γρήγορης μάσκας
 	Blur Gallery	Συλλογή θολώσεων
 	Blur More	Περισσότερη θόλωση
@@ -1540,6 +1546,7 @@
 	Align with layer	Στοίχιση με το επίπεδο
 	Reset Alignment	Επαναφορά στοίχισης
 	Centre the gradient (offset 0, 0)	Κεντράρισμα διαβάθμισης (μετατόπιση 0, 0)
+	Refine Strokes	Πινελιές βελτίωσης
 # Gradient Editor window, opened from the options bar's gradient swatch.
 	Gradient Editor	Επεξεργασία διαβάθμισης
 	Gradient picker	Επιλογή διαβάθμισης
@@ -1649,6 +1656,8 @@
 	Click to apply, ⌥-click to clear overrides, double-click for Style Options	Κλικ για εφαρμογή, ⌥-κλικ για εκκαθάριση παρακάμψεων, διπλό κλικ για επιλογές στυλ
 	Click: corner · Drag: smooth · Click first point: close · ↩ finish · Esc cancel	Κλικ: γωνία · Σύρσιμο: ομαλή καμπύλη · Κλικ στο πρώτο σημείο: κλείσιμο · ↩ ολοκλήρωση · Esc ακύρωση
 	Lasso around an area, then drag the selection	Σχεδιάστε επιλογή με το Lasso γύρω από μια περιοχή και σύρετέ την
+	Transform On Drop	Μετασχηματισμός κατά την απόθεση
+	Scale or rotate the moved area, then press {key}	Αλλάξτε μέγεθος ή περιστρέψτε τη μετακινημένη περιοχή και πατήστε {key}
 	Now drag the selection onto another area	Τώρα σύρετε την επιλογή σε άλλη περιοχή
 	Rulers  (⌘R)	Χάρακες  (⌘R)
 	Show Guides  (⌘;)	Εμφάνιση οδηγών  (⌘;)
@@ -3647,7 +3656,7 @@ cameraData	Lens	Φακός
 	Freeform Pen Tool	Πένα ελεύθερης σχεδίασης
 	Curvature Pen Tool	Πένα καμπυλότητας
 	Curve Fit:	Προσαρμογή καμπύλης:
-	Drag: draw freehand · Release on the start point: close	Σύρσιμο: ελεύθερη σχεδίαση · Άφημα στο αρχικό σημείο: κλείσιμο
+	Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close	Σύρσιμο: ελεύθερη σχεδίαση · {alt}-κλικ: ευθύ τμήμα · Άφημα στο αρχικό σημείο: κλείσιμο
 	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Κλικ: ομαλό σημείο · Διπλό κλικ: γωνία · Σύρσιμο σημείου: μετακίνηση · Κλικ στο πρώτο σημείο: κλείσιμο · {key}: τέλος
 	New Crop Preset…	Νέα προεπιλογή περικοπής…
 	Delete Crop Preset…	Διαγραφή προεπιλογής περικοπής…
@@ -3659,6 +3668,19 @@ cameraData	Lens	Φακός
 	Snap to Origin	Προσκόλληση στην αρχή
 	Search settings…	Αναζήτηση ρυθμίσεων…
 	No matching settings	Δεν βρέθηκαν ρυθμίσεις
+	Loading fonts…	Φόρτωση γραμματοσειρών…
+	Simulate Pressure	Προσομοίωση πίεσης
+	Stroke Path…	Περίγραμμα διαδρομής…
+	Background Eraser	Γόμα φόντου
+	Healing Brush	Πινέλο επιδιόρθωσης
+	Spot Healing Brush	Πινέλο τοπικής επιδιόρθωσης
+	Smudge	Μουντζούρωμα
+	Dodge	Φωτισμός
+	Burn	Σκοτείνιασμα
+	Sponge	Σφουγγάρι
+	Amount:	Ποσότητα:
+	Protect:	Προστασία:
+	Protect skin tones	Προστασία τόνων δέρματος
 # Select and Mask view modes (#1754)
 	Onion Skin	Φλούδα κρεμμυδιού
 	Marching Ants	Κινούμενο περίγραμμα
@@ -3683,6 +3705,11 @@ cameraData	Lens	Φακός
 	Emulsion Down	Γαλάκτωμα προς τα κάτω
 	Functions	Λειτουργίες
 	Print Resolution:	Ανάλυση εκτύπωσης:
+	Use Previous Layer to Create Clipping Mask	Χρήση του προηγούμενου επιπέδου για δημιουργία μάσκας αποκοπής
+	Fill with {mode}-neutral color (white)	Γέμισμα με το ουδέτερο χρώμα της λειτουργίας {mode} (λευκό)
+	Fill with {mode}-neutral color (black)	Γέμισμα με το ουδέτερο χρώμα της λειτουργίας {mode} (μαύρο)
+	Fill with {mode}-neutral color (50% gray)	Γέμισμα με το ουδέτερο χρώμα της λειτουργίας {mode} (50% γκρι)
+	(No neutral color exists for {mode} mode.)	(Δεν υπάρχει ουδέτερο χρώμα για τη λειτουργία {mode}.)
 # View › Guides › New Guide… › Color
 	Light Blue	Ανοιχτό μπλε
 	Light Red	Ανοιχτό κόκκινο

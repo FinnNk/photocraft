@@ -486,6 +486,11 @@
 	Color Range…	Intervalo de cores…
 	Focus Area…	Área de foco…
 	Select and Mask…	Selecionar e mascarar…
+# Select and Mask dialog labels
+	Smart Radius	Raio inteligente
+	Shift Edge	Deslocar borda
+	Decontaminate	Descontaminar
+	Refine Edge	Refinar borda
 	Modify	Modificar
 	Border…	Borda…
 	Smooth…	Suavizar…
@@ -754,6 +759,7 @@
 	Split Warp Horizontally	Dividir deformação horizontalmente
 	Split Warp Vertically	Dividir deformação verticalmente
 	Statistics…	Estatísticas…
+	Refine Strokes	Traços de refinamento
 @plural	{n} item|{n} items	{n} item|{n} itens
 	Auto	Automático
 	(print to the printer)	(imprimir na impressora)
@@ -2624,6 +2630,8 @@ cameraRaw	Blending	Mesclagem
 	Patch Tool	Ferramenta Correção
 	Patch:	Correção:
 	Lasso around an area, then drag the selection	Contorne uma área com o laço e arraste a seleção
+	Transform On Drop	Transformar ao soltar
+	Scale or rotate the moved area, then press {key}	Dimensione ou gire a área movida e pressione {key}
 	Now drag the selection onto another area	Agora arraste a seleção para outra área
 	3 x 3	3 × 3
 	4 x 4	4 × 4
@@ -2971,7 +2979,7 @@ cameraData	Lens	Lente
 	Freeform Pen Tool	Ferramenta Caneta de forma livre
 	Curvature Pen Tool	Ferramenta Caneta de curvatura
 	Curve Fit:	Ajuste de curva:
-	Drag: draw freehand · Release on the start point: close	Arrastar: desenhar à mão livre · Soltar no ponto inicial: fechar
+	Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close	Arrastar: desenhar à mão livre · {alt}-clique: segmento reto · Soltar no ponto inicial: fechar
 	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Clique: ponto suave · Clique duplo: canto · Arrastar um ponto: mover · Clique no primeiro ponto: fechar · {key}: concluir
 	New Crop Preset…	Nova predefinição de corte…
 	Delete Crop Preset…	Excluir predefinição de corte…
@@ -2983,6 +2991,18 @@ cameraData	Lens	Lente
 	Snap to Origin	Ajustar à origem
 	Search settings…	Pesquisar configurações…
 	No matching settings	Nenhuma configuração encontrada
+	Loading fonts…	Carregando fontes…
+	Tool	Ferramenta
+	Simulate Pressure	Simular pressão
+	Stroke Path…	Traçar demarcador…
+	Background Eraser	Borracha de plano de fundo
+	Healing Brush	Pincel de recuperação
+	Spot Healing Brush	Pincel de recuperação para manchas
+	Smudge	Borrar
+	Sponge	Esponja
+	Amount:	Quantidade:
+	Protect:	Proteger:
+	Protect skin tones	Proteger tons de pele
 # Select and Mask view modes (#1754)
 	Onion Skin	Papel vegetal
 	Marching Ants	Formigas marchando
@@ -3727,7 +3747,6 @@ layerLabel	No Color	Sem cor
 	Texturizer	Texturizador
 	Tiles	Ladrilhos
 	Tilt-Shift	Tilt-Shift
-	Tool	Ferramenta
 	Trace Contour	Traçar contorno
 	Trap	Encaixe
 	Tree	Árvore
@@ -3759,7 +3778,6 @@ layerLabel	No Color	Sem cor
 	Prime105	Prime 105 mm
 	Prime35	Prime 35 mm
 	Rgb	RGB
-	Sponge	Esponja
 	Warming L B A	Filtro quente LBA
 	Warming81	Filtro quente (81)
 	Warming85	Filtro quente (85)
@@ -3779,6 +3797,11 @@ layerLabel	No Color	Sem cor
 	Emulsion Down	Emulsão para baixo
 	Functions	Funções
 	Print Resolution:	Resolução de impressão:
+	Use Previous Layer to Create Clipping Mask	Usar a camada anterior para criar máscara de corte
+	Fill with {mode}-neutral color (white)	Preencher com a cor neutra de {mode} (branco)
+	Fill with {mode}-neutral color (black)	Preencher com a cor neutra de {mode} (preto)
+	Fill with {mode}-neutral color (50% gray)	Preencher com a cor neutra de {mode} (cinza 50%)
+	(No neutral color exists for {mode} mode.)	(Não existe cor neutra para o modo {mode}.)
 # View › Guides › New Guide… › Color
 	Light Blue	Azul-claro
 	Light Red	Vermelho-claro

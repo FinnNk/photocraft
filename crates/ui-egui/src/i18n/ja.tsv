@@ -500,6 +500,12 @@
 	Color Range…	色域指定…
 	Focus Area…	焦点領域…
 	Select and Mask…	選択とマスク…
+# Select and Mask dialog labels
+	Smart Radius	スマート半径
+	Shift Edge	エッジをシフト
+	Decontaminate	混入を除去
+	Output	出力
+	Refine Edge	境界線を調整
 	Modify	選択範囲を修正
 	Border…	境界…
 	Smooth…	滑らかに…
@@ -768,6 +774,7 @@
 	Split Warp Horizontally	ワープを水平方向に分割
 	Split Warp Vertically	ワープを垂直方向に分割
 	Statistics…	統計情報…
+	Refine Strokes	調整ストローク
 @plural	{n} item|{n} items	{n} 件
 	Auto	自動
 
@@ -2185,6 +2192,8 @@ cameraRaw	Color	カラー
 	Patch Tool	パッチツール
 	Patch:	パッチ:
 	Lasso around an area, then drag the selection	投げ縄で範囲を囲み、選択範囲をドラッグします
+	Transform On Drop	ドロップ時に変形
+	Scale or rotate the moved area, then press {key}	移動した範囲を拡大・縮小または回転し、{key} を押します
 	Now drag the selection onto another area	選択範囲を別の場所へドラッグします
 	Edit Type	文字を編集
 
@@ -3561,7 +3570,7 @@ cameraData	Lens	レンズ
 	Freeform Pen Tool	フリーフォームペンツール
 	Curvature Pen Tool	曲線ペンツール
 	Curve Fit:	カーブフィット:
-	Drag: draw freehand · Release on the start point: close	ドラッグ: フリーハンドで描画 · 始点で離す: 閉じる
+	Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close	ドラッグ: フリーハンドで描画 · {alt}+クリック: 直線セグメント · 始点で離す: 閉じる
 	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	クリック: スムーズポイント · ダブルクリック: 角 · 点をドラッグ: 移動 · 最初の点をクリック: 閉じる · {key} 完了
 	New Crop Preset…	新規切り抜きプリセット…
 	Delete Crop Preset…	切り抜きプリセットを削除…
@@ -3573,6 +3582,16 @@ cameraData	Lens	レンズ
 	Snap to Origin	原点にスナップ
 	Search settings…	設定を検索…
 	No matching settings	一致する設定はありません
+	Loading fonts…	フォントを読み込み中…
+	Simulate Pressure	筆圧をシミュレート
+	Stroke Path…	パスのストローク…
+	Background Eraser	背景消しゴム
+	Healing Brush	修復ブラシ
+	Spot Healing Brush	スポット修復ブラシ
+	Smudge	指先
+	Amount:	量:
+	Protect:	保護:
+	Protect skin tones	肌色を保護
 # Select and Mask view modes (#1754)
 	Onion Skin	オニオンスキン
 	Marching Ants	点線の境界
@@ -3598,6 +3617,11 @@ cameraData	Lens	レンズ
 	Emulsion Down	乳剤面を下
 	Functions	機能
 	Print Resolution:	プリント解像度:
+	Use Previous Layer to Create Clipping Mask	下のレイヤーを使用してクリッピングマスクを作成
+	Fill with {mode}-neutral color (white)	{mode} の中間色で塗りつぶす (白)
+	Fill with {mode}-neutral color (black)	{mode} の中間色で塗りつぶす (黒)
+	Fill with {mode}-neutral color (50% gray)	{mode} の中間色で塗りつぶす (50% グレー)
+	(No neutral color exists for {mode} mode.)	({mode} モードには中間色がありません。)
 # View › Guides › New Guide… › Color
 	Light Blue	ライトブルー
 	Light Red	ライトレッド

@@ -480,22 +480,9 @@ fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, two_columns: bool) {
             p.add(egui::Shape::convex_polygon(vec![tip, base + side * 3.0, base - side * 3.0], ink(&s), Stroke::NONE));
         }
     } else {
-        // Switch Colors: a quarter-circle arrow with a head at each end.
-        let stroke = Stroke::new(1.3, ink(&s));
-        let (c, rad) = (pos2(sr.left() + 2.0, sr.bottom() - 1.0), sr.width() - 4.0);
-        let arc: Vec<_> = (0..=8)
-            .map(|i| {
-                let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
-                c + vec2(rad * a.sin(), -rad * a.cos())
-            })
-            .collect();
-        let (start, end) = (arc[0], arc[arc.len() - 1]);
-        p.add(egui::Shape::line(arc, stroke));
-        let head = 3.0;
-        p.line_segment([start, start + vec2(head, -head)], stroke);
-        p.line_segment([start, start + vec2(head, head)], stroke);
-        p.line_segment([end, end + vec2(-head, -head)], stroke);
-        p.line_segment([end, end + vec2(head, -head)], stroke);
+        // Switch Colors: the compact clockwise bend has left- and down-pointing heads.
+        // swap_arrow.rs owns its geometry and the pixel-level render regression test.
+        crate::swap_arrow::paint(p, sr.min, ink(&s));
     }
     // Default Colors: a small black chip over a small white one.
     if let (Some(dr), Some(d)) = (dr, d.as_ref()) {
@@ -641,7 +628,14 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             egui::RichText::new(tl!("Discord")).color(t.text_dim).size(12.0),
                         )
                         .frame(false);
-                        if ui.add(discord).on_hover_text(format!("Join the ArtCraft Discord ({})", crate::links::DISCORD)).clicked() {
+                        if ui
+                            .add(discord)
+                            .on_hover_text({
+                                let template = "Join the ArtCraft Discord ({url})";
+                                crate::i18n::fmt(tl!(template), &[("url", crate::links::DISCORD)])
+                            })
+                            .clicked()
+                        {
                             crate::links::open(app, ui.ctx(), crate::links::DISCORD);
                         }
                     }
@@ -861,9 +855,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .exact_size(if t.pro { 36.0 } else { 42.0 })
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(10, 0)))
         .show(ui, |ui| {
-            let r = ui.max_rect();
-            ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, t.separator));
-            ui.painter().line_segment([r.left_bottom(), r.right_bottom()], Stroke::new(1.0, t.separator));
             ui.style_mut().spacing.scroll = egui::style::ScrollStyle { bar_width: 4.0, ..egui::style::ScrollStyle::floating() };
             egui::ScrollArea::horizontal().id_salt("tool-options").auto_shrink([false, false]).show(ui, |ui| {
             // Font ink can extend beyond its advance width at fractional positions.
@@ -966,7 +957,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ui.add_enabled_ui(!block && !crate::eraser_ui::pencil_mode(app, app.ui.tool), |ui| {
                             percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 62.0);
                             let airbrush = icons::button(ui, "sparkles", 24.0, b.build_up, tl!("Enable airbrush-style build-up effects"));
-                            if crate::brush_picker::named(airbrush, tl!("Enable airbrush-style build-up effects")).clicked() {
+                            if crate::brush_picker::named(airbrush, "Enable airbrush-style build-up effects").clicked() {
                                 b.build_up = !b.build_up;
                             }
                         });
@@ -1499,10 +1490,12 @@ fn body_text_width(ui: &egui::Ui, s: &str) -> f32 {
 }
 
 /// Options-bar label: Photoshop writes "Size:" with a colon.
+/// An options-bar label; one right before a value field scrubs it when dragged (Photoshop).
 fn opt_label(ui: &mut egui::Ui, s: &str) {
     let t = Tokens::get(ui.ctx());
     let text = if t.pro && !s.ends_with(':') { format!("{s}:") } else { s.to_string() };
-    ui.label(RichText::new(tl!(&text)).color(t.text_dim));
+    let label = ui.label(RichText::new(tl!(&text)).color(t.text_dim));
+    widgets::scrub_label(ui, &label);
 }
 
 fn percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) {
@@ -1854,7 +1847,7 @@ fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let controls = ui.vertical(|ui| {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            label(ui, tl!("Zoom"));
+            label(ui, crate::i18n::tr_ctx(crate::i18n::current(), "navigator", "Zoom"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 for (lbl, z) in [("200%", 2.0), ("100%", 1.0)] {
                     if widgets::pill_tab(ui, lbl, (v.zoom - z).abs() < 1e-3).clicked() {
@@ -2187,7 +2180,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 
     // Top of the stack first, groups above their contents, closed groups' contents hidden (#126).
-    let rows = crate::layer_tree_ui::display_rows(&doc, !app.ui.layer_filter.is_empty());
+    let rows = crate::layer_tree_ui::panel_rows(app, &doc);
     let ctx = ui.ctx().clone();
     let footer = widgets::footer_height(ui) + ui.spacing().item_spacing.y;
     let fill = ui.available_height() > footer + 60.0;
@@ -2275,6 +2268,8 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let in_selection = selection.iter().any(|s| s.0 == id);
         (id, in_selection)
     });
+    // An effect row can be dropped on Delete too (#3102).
+    let fx_footer_drag = ctx.data(|d| d.get_temp::<FxDrag>(fx_drag_key()));
     fx_drag_feedback(&ctx, &doc);
     // End any layer drag after every row has had a chance to accept the drop.
     if ctx.input(|i| i.pointer.any_released()) {
@@ -2298,12 +2293,15 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             actions.push((delete.into(), params));
         }
         actions.extend(footer_drop(ui, &trash, footer_drag, "layer.delete"));
+        actions.extend(fx_trash_drop(ui, &trash, fx_footer_drag));
         // A click follows the selected thumbnail; name that action for screen readers even
         // though dropping a whole layer row onto the same button always deletes the layer.
         trash.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(label)));
         let new_layer = icons::button(ui, "square-plus", 26.0, false, &crate::shortcuts::tip_label(app, "Create a new layer", "layer.new.layer"));
         if new_layer.clicked() {
-            actions.push(("layer.new.layer".into(), json!({})));
+            // A click makes the layer; ⌥-click asks first (the New Layer dialog), as in Photoshop.
+            let alt = ui.input(|i| i.modifiers.alt);
+            actions.push(("layer.new.layer".into(), if alt { Value::Null } else { json!({}) }));
         }
         actions.extend(footer_drop(ui, &new_layer, footer_drag, "layer.duplicate"));
         let group = icons::button(ui, "folder", 26.0, false, tl!("Create a new group"));
@@ -2408,16 +2406,32 @@ fn footer_drop(ui: &egui::Ui, button: &egui::Response, drag: Option<(u64, bool)>
     // Named for screen readers (and tests) after the command a drop runs.
     button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, footer_label(command)));
     let (layer, in_selection) = drag?;
-    let p = ui.ctx().input(|i| i.pointer.interact_pos())?;
+    dropped_on(ui, button).then(|| (command.into(), if in_selection { json!({}) } else { json!({"layer": layer}) }))
+}
+
+/// While something is dragged over a footer `button`: highlights it, and is true on the release.
+fn dropped_on(ui: &egui::Ui, button: &egui::Response) -> bool {
+    let Some(p) = ui.ctx().input(|i| i.pointer.interact_pos()) else { return false };
     if !button.rect.contains(p) {
-        return None;
+        return false;
     }
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_stroke(button.rect, t.radius_sm, Stroke::new(2.0, t.accent), StrokeKind::Inside);
-    if !ui.ctx().input(|i| i.pointer.any_released()) {
+    ui.ctx().input(|i| i.pointer.any_released())
+}
+
+/// Effects dragged onto the footer's Delete button, as in Photoshop (#3102): the "Effects" row
+/// clears the layer style, an effect's row deletes just that effect.
+fn fx_trash_drop(ui: &egui::Ui, button: &egui::Response, drag: Option<FxDrag>) -> Option<(String, Value)> {
+    let (layer, effect) = drag?;
+    if !dropped_on(ui, button) {
         return None;
     }
-    Some((command.into(), if in_selection { json!({}) } else { json!({"layer": layer}) }))
+    let params = match effect {
+        Some(i) => json!({"layer": layer, "effect": i}),
+        None => json!({"layer": layer}),
+    };
+    Some(("layer.layerStyle.clear".into(), params))
 }
 
 fn footer_label(command: &str) -> &'static str {
@@ -2696,6 +2710,10 @@ fn layer_row(
             app.ui.selected_path = Some("layer".into());
             actions.push(("ui.vectorMaskTarget".into(), json!(true)));
         } else if on_mask || (content_less && l.mask.is_some() && !on_thumb) {
+            if on_mask {
+                // The mask thumbnail also switches Properties to the mask (#3369).
+                app.ui.properties_layer = None;
+            }
             actions.push(("ui.maskTarget".into(), json!(true)));
         } else if on_thumb || !row.primary {
             actions.push(("ui.maskTarget".into(), json!(false)));
@@ -3060,7 +3078,7 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
 
 /// Docked Properties body (Pro theme).
 fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let identity = app.session.active().map(|st| (st.doc.id, st.active_layer, app.ui.mask_target, app.ui.vector_mask_target));
+    let identity = app.session.active().map(|st| (st.doc.id, st.active_layer, app.ui.mask_target, app.ui.vector_mask_target, app.ui.properties_layer));
     ui.push_id(("properties-target", identity), |ui| properties_body_inner(app, ui));
 }
 
@@ -3435,7 +3453,7 @@ fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, 
 /// like the Smoothing % (so they stay per tool and reach the live stroke and the commit).
 fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) {
     let resp = icons::button(ui, "settings", 24.0, false, tl!("Set additional smoothing options"));
-    let resp = crate::brush_picker::named(resp, tl!("Set additional smoothing options"));
+    let resp = crate::brush_picker::named(resp, "Set additional smoothing options");
     egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let s = &mut b.smoothing;
         widgets::checkbox(ui, &mut s.pulled_string, tl!("Pulled String Mode"));

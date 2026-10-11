@@ -49,6 +49,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
   - `typeTransform` is `null` outside a temporary Ctrl/Cmd Type-tool drag. During a drag it reports its source document/revision, original affine, oriented `frame` (layer, local bounds, document-space corners and pivot), and captured `gesture`. Drive it with `ui.pointer` and `command: true` at `down`; `move`/`up` may release the modifier. The document/history remain unchanged during preview, and `up` applies one `type.edit` within `textEdit`'s session. Pressing Escape during the drag cancels only the preview. This pointer state is never restored from saved UI state.
 - `ui.menu.invoke {id, params?, wait?}` / `ui.menu.list`: activate a menu item by id; list the menu tree. A menu item that starts a background job (a filter without a dialog, such as Blur More) replies with the job's result once it has been applied; with `"wait": false` the reply is `{job, pending: true}` at once. Window ends with the open documents as `window.document.<index>` (tab order, the active one checked, #2991); invoking one brings that document to the front and replies `{document: index}`
 - `ui.set` also accepts `gradientBlendMode` (a layer blend mode name, such as `Difference`) and `gradientClassic` (boolean) for the Gradient tool options bar.
+- `ui.set` also accepts `camTransformOnDrop` (boolean), the Content-Aware Move tool's Transform On Drop checkbox: a drop then puts a scale/rotate box on the patch (`ui.inspect` › `camTransform`: its document/revision, drag `offset` and `frame`), driven with `ui.pointer` (handles as Free Transform's; outside the box rotates), committed with `ui.key Enter` (one `paint.contentAwareMove` with `scaleX`, `scaleY`, `rotate`) or dropped with `Escape`.
 - Each painting tool keeps its own brush, as in Photoshop: `tools.setBrush` and `ui.set {brushSize}` change the active tool's brush, and switching tools swaps in that tool's own (size, hardness, mode, opacity, flow, dynamics, smoothing). A tool used for the first time starts from the brush in hand. The colours, the erase flag and the stroke seed stay shared. So `ui.set {tool: "eraser", brushSize: 12}` sets the Eraser's size, and `ui.set {tool: "brush"}` afterwards brings the Brush's own size back.
 - `ui.set` also accepts the Eyedropper options bar (#1649): `eyedropperSampleSize` (`"point"` or 1, 3, 5, 11, 31, 51, 101: the side of the averaged square, shared by the Eyedropper, a painting tool's Alt-click eyedropper, the Curves/Color Picker eyedroppers and the Info panel), `eyedropperSample` (`current`, `currentAndBelow`, `all`, `allNoAdjustments`, `currentAndBelowNoAdjustments`) and `eyedropperRing` (boolean, Show Sampling Ring). `ui.inspect` reports them under `toolOptions` (`eyedropper_size`, `eyedropper_sample`, `eyedropper_ring`). The engine command `document.sampleColor {x, y, size, sampleLayer}` returns the colour such a sample picks.
 - `ui.set` also accepts the Crop tool's overlay menu (#1919): `cropOverlay` (`thirds`, `grid`, `diagonal`, `triangle`, `goldenRatio`, `goldenSpiral`), `cropOverlayShow` (`auto`: only while the crop box is dragged, Photoshop's default; `always`; `never`) and `cropOverlayOrientation` (0..3; Triangle has two orientations and Golden Spiral four, the others ignore it). `ui.inspect` reports them under `toolOptions` (`crop_overlay`, `crop_overlay_show`, `crop_overlay_orientation`). In the app, O cycles the overlay and ⇧O its orientation while the Crop tool shows a box.
@@ -120,6 +121,8 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `actions.delete` | `{"action": name or index, "step": index?}`. With a zero-based `step`: `{action, deletedStep, steps}`, also allowed while recording. Without `step`: `{deleted}`, refused while recording |
 | `actions.toggle` | `{"action": name or index, "step": index?, "enabled": bool?}` → `{action, disabled}`. Switches one 0-based step (pending recorded steps included) on or off; omitting `enabled` flips it. Without `step`, switches every step: on unless all already are. Playback, Batch and droplets skip steps that are off. In the desktop panel, click a step's check box |
 | `actions.rename` | `{"action": name or index, "name": str}` → `{action, index}`. Empty, whitespace-only or duplicate names are rejected and keep the old name. Nested `actions.play` steps that call the action by name and its function key follow the new name. In the desktop panel, double-click an action's name to rename it in place (Enter commits, Esc cancels) |
+
+The Actions list fills the resizable dock group.
 
 The Actions panel shows replayable steps immediately while recording. Click an individual
 step to select it, then use the trash button to remove that step; selecting the action
@@ -259,6 +262,7 @@ How each MCP tool maps onto control methods in bridge mode:
 | `doc_new {…}` | `engine.execute {command: "file.new", params}` |
 | `doc_inspect` | `engine.execute {command: "document.inspect"}` |
 | `doc_open {path}` | `app.open {path}` |
+| `doc_place {path, …}` | `engine.execute {command: "file.placeEmbedded", params}` |
 | `doc_save {path?, tgaBits?}` / `doc_export {path, tgaBits?}` | `app.save {path?, tgaBits?}` |
 | `doc_render_preview {max_side?}` | `ui.screenshot`, returned directly as PNG image content |
 | `session_list`, `ui_inspect` | `ui.inspect` |
@@ -312,6 +316,7 @@ no MCP framing, no app start-up per command. Configure its file access with the 
 | `engine.commands` | `{filter?}`: registry with params docs and enablement |
 | `session.list` | open documents and the active index |
 | `doc.open` / `doc.new` | `{path}` / `file.new` params |
+| `doc.place` | `{path, scale? (percent), fit? (true), center? ([x, y]), index?}`: places a file as a Smart Object layer above the active one and returns `{layer, scale, bounds}`. `path` resolves beneath the read root, so this is the capability-scoped `file.placeEmbedded` — that command itself still refuses an ambient path |
 | `doc.save` | `{path?, format?, quality?, index?, tiffLayers?, tgaBits?}` (`.pcraft` native, else export by extension; set `tiffLayers: true` to preserve TIFF layers rather than exporting a flattened TIFF; `tgaBits` 24 or 32 sets a TGA's bits per pixel, as `app.save` does). Without `path` only a PSD, PSB or `.pcraft` document is written back to its own file, in its own format; anything else is an error and the file is left unchanged. A successful layered save (PSD, PSB or `.pcraft`) records the current revision as saved and makes the file the document's path, so `session.list` reports `dirty: false`; a flat export is a copy and leaves the document dirty |
 | `doc.inspect` | `{index?}`: same JSON as `document.inspect` |
 | `doc.render` | `{index?, maxSide? (1024; 0 = full), path?}`: PNG to `path`, else `{mime, base64}` |
@@ -508,6 +513,10 @@ Missing actions, recursive calls and nesting beyond 16 levels fail visibly; a ch
 the parent before its next step. Every nested command retains the normal automation permission check.
 Existing recordings containing expanded commands remain unchanged; remove those steps and record
 the named call again if desired.
+
+Layer-panel **Quick Export as PNG** exports every selected layer as a separate PNG. A single
+Save dialog chooses the first filename; remaining files are numbered siblings with sanitized
+layer names. Selection is captured before opening the dialog; an unselected layer is excluded.
 
 ## Shared panel docking
 
