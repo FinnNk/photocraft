@@ -172,18 +172,24 @@ impl Unit {
         if !v.is_finite() {
             return None;
         }
-        let unit = match suffix.trim().to_ascii_lowercase().as_str() {
-            "" => None,
-            "px" | "pixel" | "pixels" => Some(Unit::Pixels),
-            "in" | "inch" | "inches" | "\"" => Some(Unit::Inches),
-            "cm" | "centimeter" | "centimeters" | "centimetre" | "centimetres" => Some(Unit::Centimeters),
-            "mm" | "millimeter" | "millimeters" | "millimetre" | "millimetres" => Some(Unit::Millimeters),
-            "pt" | "point" | "points" => Some(Unit::Points),
-            "pc" | "pica" | "picas" => Some(Unit::Picas),
-            "%" | "percent" => Some(Unit::Percent),
-            _ => return None,
-        };
+        let suffix = suffix.trim();
+        let unit = if suffix.is_empty() { None } else { Some(Unit::from_suffix(suffix)?) };
         Some((v, unit))
+    }
+    /// The unit a typed suffix names, in any case: `px`, `in` or `"`, `cm`, `mm`, `pt`, `pc` or
+    /// `pica`, `%`, and their long forms (`pixels`, `inches`, `centimetres`…). The one table every
+    /// length field reads.
+    pub fn from_suffix(suffix: &str) -> Option<Unit> {
+        Some(match suffix.to_ascii_lowercase().as_str() {
+            "px" | "pixel" | "pixels" => Unit::Pixels,
+            "in" | "inch" | "inches" | "\"" => Unit::Inches,
+            "cm" | "centimeter" | "centimeters" | "centimetre" | "centimetres" => Unit::Centimeters,
+            "mm" | "millimeter" | "millimeters" | "millimetre" | "millimetres" => Unit::Millimeters,
+            "pt" | "point" | "points" => Unit::Points,
+            "pc" | "pica" | "picas" => Unit::Picas,
+            "%" | "percent" => Unit::Percent,
+            _ => return None,
+        })
     }
 }
 
