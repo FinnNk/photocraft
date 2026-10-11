@@ -620,20 +620,20 @@ fn guide_position(s: &Session, p: &Value, vertical: bool) -> Result<Option<f64>>
     Ok(Some(px))
 }
 
-/// The colours of View › Guides › New Guide… › Color, by the names `view.newGuide` takes, with the
-/// label each shows. Values approximate Photoshop's on screen (rounded to web-safe steps), except
-/// Cyan, which is the default guide colour in Preferences, so a guide dragged from a ruler shows as
-/// Cyan when it's edited.
-pub const GUIDE_COLORS: [(&str, &str, [u8; 3]); 9] = [
-    ("lightBlue", "Light Blue", [0x33, 0x66, 0xff]),
-    ("lightRed", "Light Red", [0xff, 0x33, 0x33]),
-    ("green", "Green", [0x33, 0xff, 0x33]),
-    ("mediumBlue", "Medium Blue", [0x33, 0x33, 0xff]),
-    ("yellow", "Yellow", [0xff, 0xff, 0x33]),
-    ("magenta", "Magenta", [0xff, 0x33, 0xff]),
-    ("cyan", "Cyan", [0x4a, 0xff, 0xff]),
-    ("lightGray", "Light Gray", [0xe7, 0xe7, 0xe7]),
-    ("black", "Black", [0x00, 0x00, 0x00]),
+/// Photoshop's guide colours, in its order, by the names `view.newGuide` takes: New Guide's and
+/// New Guide Layout's Color lists. Cyan (the default guide colour in Preferences, so a guide
+/// dragged from a ruler reads as Cyan), Magenta and Yellow are the values New Guide Layout first
+/// shipped with; the rest approximate Photoshop's on screen, rounded to web-safe steps.
+pub const GUIDE_COLORS: [(&str, [u8; 3]); 9] = [
+    ("lightBlue", [0x33, 0x66, 0xff]),
+    ("lightRed", [0xff, 0x33, 0x33]),
+    ("green", [0x33, 0xff, 0x33]),
+    ("mediumBlue", [0x33, 0x33, 0xff]),
+    ("yellow", [0xff, 0xcc, 0x00]),
+    ("magenta", [0xff, 0x00, 0xff]),
+    ("cyan", [0x4a, 0xff, 0xff]),
+    ("lightGray", [0xe7, 0xe7, 0xe7]),
+    ("black", [0x00, 0x00, 0x00]),
 ];
 
 /// A guide `color`: one of [`GUIDE_COLORS`]' names or `"#rrggbb"`. `None` when there is no `color`
@@ -1531,15 +1531,15 @@ mod tests {
         s.execute("view.newGuide", json!({"orientation": "vertical", "position": 20, "color": "magenta"})).unwrap();
         s.execute("view.newGuide", json!({"orientation": "horizontal", "position": 20, "color": "#123456"})).unwrap();
         s.execute("view.newGuide", json!({"orientation": "vertical", "position": 30, "color": "LightBlue"})).unwrap();
-        assert_eq!(color(&s, true, 20.0), Some([0xff, 0x33, 0xff]));
+        assert_eq!(color(&s, true, 20.0), Some([0xff, 0x00, 0xff]));
         assert_eq!(color(&s, false, 20.0), Some([0x12, 0x34, 0x56]), "the same position across is a different guide");
         assert_eq!(color(&s, true, 30.0), Some([0x33, 0x66, 0xff]), "names are case-insensitive");
         // Moving takes the colour along.
         s.execute("view.moveGuide", json!({"orientation": "vertical", "index": 1, "position": 25})).unwrap();
-        assert_eq!((color(&s, true, 20.0), color(&s, true, 25.0)), (None, Some([0xff, 0x33, 0xff])));
+        assert_eq!((color(&s, true, 20.0), color(&s, true, 25.0)), (None, Some([0xff, 0x00, 0xff])));
         // Undo restores it where it was.
         s.undo();
-        assert_eq!((color(&s, true, 20.0), color(&s, true, 25.0)), (Some([0xff, 0x33, 0xff]), None));
+        assert_eq!((color(&s, true, 20.0), color(&s, true, 25.0)), (Some([0xff, 0x00, 0xff]), None));
         // Deleting drops it; clearing drops them all.
         s.execute("view.deleteGuide", json!({"orientation": "vertical", "index": 2})).unwrap();
         assert_eq!(color(&s, true, 30.0), None);

@@ -28,7 +28,7 @@ const CUSTOM: &str = "custom";
 const DEFAULT_COLOR: &str = "cyan";
 
 /// A colour's label in the list (the catalogue holds each one).
-fn color_label(name: &str) -> &'static str {
+pub(crate) fn color_label(name: &str) -> &'static str {
     match name {
         "lightBlue" => tl!("Light Blue"),
         "lightRed" => tl!("Light Red"),

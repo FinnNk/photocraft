@@ -105,7 +105,7 @@ fn guides_store_the_chosen_colour_cyan_by_default() {
     set(&mut app, d, "vertical", "20");
     app.ui.dialog_mut(d).unwrap().fields.insert("color".into(), json!("magenta"));
     crate::dialogs::confirm(&mut app, d).unwrap();
-    assert_eq!(color_of(&app, true, 20.0), Some([0xff, 0x33, 0xff]));
+    assert_eq!(color_of(&app, true, 20.0), Some([0xff, 0x00, 0xff]));
     // Custom… sends the picked colour; the list's choice and the custom colour open next time.
     let d = open(&mut app, &ctx);
     assert_eq!(app.ui.dialog_mut(d).unwrap().fields["color"], "magenta");

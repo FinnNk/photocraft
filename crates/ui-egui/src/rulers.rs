@@ -143,17 +143,6 @@ pub fn draw_grid(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, d
     }
 }
 
-pub(crate) fn parse_guide_color(value: &str) -> Option<Color32> {
-    let value = value.strip_prefix('#')?;
-    if value.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(value.get(0..2)?, 16).ok()?;
-    let g = u8::from_str_radix(value.get(2..4)?, 16).ok()?;
-    let b = u8::from_str_radix(value.get(4..6)?, 16).ok()?;
-    Some(Color32::from_rgb(r, g, b))
-}
-
 pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let clip = painter.clip_rect();
     let drag = app.guide_drag;

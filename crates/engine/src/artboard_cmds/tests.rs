@@ -127,7 +127,7 @@ fn clearing_guides_drops_their_colours() {
     s.execute("view.clearGuides", json!({})).unwrap();
     coloured(&mut s, 0.0);
     s.execute("view.newGuideLayout", json!({"columns": 1})).unwrap();
-    assert_eq!(colour(&s, 0.0), Some([0xff, 0x33, 0xff]));
+    assert_eq!(colour(&s, 0.0), Some([0xff, 0x00, 0xff]));
     s.execute("view.newGuideLayout", json!({"columns": 1, "clearExisting": true})).unwrap();
     assert!(doc(&s).guides.vertical.contains(&0.0));
     assert_eq!(colour(&s, 0.0), None);
