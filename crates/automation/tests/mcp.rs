@@ -1068,7 +1068,20 @@ async fn convention_resources_are_live_json() {
     assert!(read("photocraft://document").await["document"].is_null());
     json_of(&call(&client, "doc_new", json!({"width":8,"height":6})).await);
     assert_eq!(read("photocraft://document").await["width"], 8);
-    assert_eq!(read("photocraft://commands").await, json_of(&call(&client, "command_list", json!({})).await));
+    // Edit › Purge › All is enabled while any process-wide cache (effects, masks, Smart Object
+    // stacks) holds data: purging is global, as in Photoshop. The other tests in this binary fill
+    // those caches in parallel, so that one `enabled` can change between the two reads; every
+    // other field must match exactly.
+    let without_purge_all_enabled = |mut commands: Value| {
+        for c in commands.as_array_mut().into_iter().flatten().filter(|c| c["id"] == "edit.purge.all") {
+            c["enabled"] = Value::Null;
+        }
+        commands
+    };
+    assert_eq!(
+        without_purge_all_enabled(read("photocraft://commands").await),
+        without_purge_all_enabled(json_of(&call(&client, "command_list", json!({})).await))
+    );
     assert!(client.read_resource(rmcp::model::ReadResourceRequestParams::new("photocraft://missing")).await.is_err());
     let preview = call(&client, "render_preview", json!({"max_side":4})).await;
     assert!(preview.content.iter().any(|c| c.as_image().is_some()));
