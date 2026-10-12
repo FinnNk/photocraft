@@ -103,11 +103,13 @@ pub mod layer_row_ui;
 pub mod layer_style;
 mod layer_transfer;
 pub mod layer_tree_ui;
+mod layout_keys;
 pub mod links;
 pub mod liquify_ui;
 pub mod magnetic_lasso_ui;
 mod mask_props_ui;
 pub mod mask_thumbs_ui;
+pub mod mask_trash_prompt;
 pub mod menu_catalog;
 pub mod menu_nav;
 pub mod menus;
@@ -861,6 +863,9 @@ impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
+            return result;
+        }
+        if let Some(result) = mask_trash_prompt::intercept(self, id, &params) {
             return result;
         }
         // Automation input also gates every step a command runs on its behalf (`actions.play`).

@@ -2650,6 +2650,8 @@ cameraData	Lens	Objektiv
 	Fill with {mode}-neutral color (black)	Mit neutraler Farbe für {mode} füllen (Schwarz)
 	Fill with {mode}-neutral color (50% gray)	Mit neutraler Farbe für {mode} füllen (50 % Grau)
 	(No neutral color exists for {mode} mode.)	(Für den Modus {mode} gibt es keine neutrale Farbe.)
+	Apply mask to layer before removing?	Maske vor dem Entfernen auf die Ebene anwenden?
+	The layer or its mask changed. Drag the mask onto the Trash again.	Die Ebene oder ihre Maske hat sich geändert. Ziehen Sie die Maske erneut in den Papierkorb.
 # View › Guides › New Guide… › Color
 	Light Blue	Hellblau
 	Light Red	Hellrot

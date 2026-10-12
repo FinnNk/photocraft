@@ -2957,6 +2957,8 @@ cameraData	Lens	Объектив
 	Fill with {mode}-neutral color (black)	Залить нейтральным цветом режима «{mode}» (черный)
 	Fill with {mode}-neutral color (50% gray)	Залить нейтральным цветом режима «{mode}» (50% серого)
 	(No neutral color exists for {mode} mode.)	(Для режима «{mode}» нет нейтрального цвета.)
+	Apply mask to layer before removing?	Применить маску к слою перед удалением?
+	The layer or its mask changed. Drag the mask onto the Trash again.	Слой или его маска изменились. Перетащите маску в корзину ещё раз.
 # View › Guides › New Guide… › Color
 	Light Blue	Светло-синий
 	Light Red	Светло-красный

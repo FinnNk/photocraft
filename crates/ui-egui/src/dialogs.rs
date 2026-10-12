@@ -232,6 +232,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 DialogKind::Command if crate::shape_dialog::owns(&fields) => crate::shape_dialog::body(app, ui, &mut fields),
                 DialogKind::Command if crate::delete_layer_prompt::owns(&fields) => crate::delete_layer_prompt::body(ui, &mut fields),
                 DialogKind::Command if crate::new_layer_ui::owns(&fields) => crate::new_layer_ui::body(ui, &mut fields),
+                DialogKind::Command if crate::mask_trash_prompt::owns(&fields) => crate::mask_trash_prompt::body(ui, &fields),
                 DialogKind::Command if crate::rasterize_prompt::owns(&fields) => crate::rasterize_prompt::body(ui, &fields),
                 DialogKind::Command if crate::tool_reset::owns(&fields) => crate::tool_reset::body(ui),
                 DialogKind::Command if crate::crop_presets::owns(&fields) => crate::crop_presets::body(app, ui, &mut fields),
@@ -316,6 +317,17 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         let clicked = if d.kind == DialogKind::Command && crate::prefs_ui::is_preferences(&fields) {
                             let changed = crate::prefs_ui::preferences_changed(app, &fields);
                             dialog_buttons(ui, &[ok, cancel, DialogButton::new(ButtonRole::Apply, tl!("Apply"), 84.0).enabled(changed)])
+                        } else if crate::mask_trash_prompt::owns(&fields) {
+                            // Photoshop: Apply / Cancel / Delete. Delete answers with the choice set.
+                            let apply = DialogButton::new(ButtonRole::Default, tl!("Apply"), 84.0).enabled(crate::mask_trash_prompt::can_apply(&fields));
+                            let delete = DialogButton::new(ButtonRole::Alternate, tl!("Delete"), 84.0);
+                            let hit = dialog_buttons(ui, &[apply, cancel, delete]);
+                            if hit == Some(ButtonRole::Alternate) {
+                                fields.insert("choice".into(), json!("delete"));
+                            } else if hit == Some(ButtonRole::Default) {
+                                fields.insert("choice".into(), json!("apply"));
+                            }
+                            hit
                         } else {
                             dialog_buttons(ui, &[ok, cancel])
                         };
@@ -469,6 +481,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         DialogKind::Command if crate::shape_dialog::owns(&d.fields) => crate::shape_dialog::confirm(app, &d.fields),
         DialogKind::Command if crate::delete_layer_prompt::owns(&d.fields) => crate::delete_layer_prompt::confirm(app, &d.fields),
         DialogKind::Command if crate::new_layer_ui::owns(&d.fields) => crate::new_layer_ui::confirm(app, &d.fields),
+        DialogKind::Command if crate::mask_trash_prompt::owns(&d.fields) => crate::mask_trash_prompt::confirm(app, &d.fields),
         DialogKind::Command if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
         DialogKind::Command if crate::tool_reset::owns(&d.fields) => crate::tool_reset::confirm(app),
         DialogKind::Command if crate::crop_presets::owns(&d.fields) => crate::crop_presets::confirm(app, &d.fields),

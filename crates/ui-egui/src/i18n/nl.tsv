@@ -3772,6 +3772,8 @@ cameraData	Lens	Lens
 	Fill with {mode}-neutral color (black)	Vullen met neutrale kleur voor {mode} (zwart)
 	Fill with {mode}-neutral color (50% gray)	Vullen met neutrale kleur voor {mode} (50% grijs)
 	(No neutral color exists for {mode} mode.)	(Voor de modus {mode} bestaat geen neutrale kleur.)
+	Apply mask to layer before removing?	Masker toepassen op laag voordat het wordt verwijderd?
+	The layer or its mask changed. Drag the mask onto the Trash again.	De laag of het masker is gewijzigd. Sleep het masker opnieuw naar de prullenbak.
 # View › Guides › New Guide… › Color
 	Light Blue	Lichtblauw
 	Light Red	Lichtrood

@@ -3015,6 +3015,8 @@ cameraData	Lens	Lensa
 	Fill with {mode}-neutral color (black)	Isi dengan warna netral {mode} (hitam)
 	Fill with {mode}-neutral color (50% gray)	Isi dengan warna netral {mode} (abu-abu 50%)
 	(No neutral color exists for {mode} mode.)	(Tidak ada warna netral untuk mode {mode}.)
+	Apply mask to layer before removing?	Terapkan masker ke layer sebelum dihapus?
+	The layer or its mask changed. Drag the mask onto the Trash again.	Layer atau maskernya berubah. Seret masker ke Tempat Sampah lagi.
 # View › Guides › New Guide… › Color
 	Light Blue	Biru Muda
 	Light Red	Merah Terang

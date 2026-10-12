@@ -2600,6 +2600,8 @@ cameraData	Lens	鏡頭
 	Fill with {mode}-neutral color (black)	使用{mode}中性色填滿（黑色）
 	Fill with {mode}-neutral color (50% gray)	使用{mode}中性色填滿（50% 灰色）
 	(No neutral color exists for {mode} mode.)	（{mode}模式沒有中性色。）
+	Apply mask to layer before removing?	移除之前將遮色片套用到圖層嗎？
+	The layer or its mask changed. Drag the mask onto the Trash again.	圖層或其遮色片已變更。請再次將遮色片拖曳到垃圾桶。
 # View › Guides › New Guide… › Color
 	Light Blue	淺藍色
 	Light Red	淺紅色

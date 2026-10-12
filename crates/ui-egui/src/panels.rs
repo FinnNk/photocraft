@@ -2196,6 +2196,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // An fx drag that never saw its release (the panel was hidden) must not outlive the button.
             if !ctx.input(|i| i.pointer.primary_down() || i.pointer.any_released()) {
                 ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
+                ctx.data_mut(|d| d.remove::<u64>(mask_drag_key()));
             }
             let held = ctx.data(|d| d.get_temp::<u64>(egui::Id::new("layer-drag")).is_some() || d.get_temp::<FxDrag>(fx_drag_key()).is_some());
             let dragging = held && ctx.input(|i| i.pointer.primary_down());
@@ -2268,13 +2269,20 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let in_selection = selection.iter().any(|s| s.0 == id);
         (id, in_selection)
     });
-    // An effect row can be dropped on Delete too (#3102).
+    // An effect row can be dropped on Delete too (#3102), and a layer mask's thumbnail (#3113).
     let fx_footer_drag = ctx.data(|d| d.get_temp::<FxDrag>(fx_drag_key()));
     fx_drag_feedback(&ctx, &doc);
+    let mask_footer_drag = ctx.data(|d| d.get_temp::<u64>(mask_drag_key()));
+    if mask_footer_drag.is_some()
+        && let Some(p) = ctx.input(|i| i.pointer.interact_pos())
+    {
+        crate::layer_transfer::ghost(&ctx, p, tl!("Layer Mask"));
+    }
     // End any layer drag after every row has had a chance to accept the drop.
     if ctx.input(|i| i.pointer.any_released()) {
         ctx.data_mut(|d| d.remove::<u64>(egui::Id::new("layer-drag")));
         ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
+        ctx.data_mut(|d| d.remove::<u64>(mask_drag_key()));
     }
     widgets::panel_footer(ui, |ui| {
         let active_layer = active.and_then(|id| doc.layer(id));
@@ -2294,6 +2302,12 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         actions.extend(footer_drop(ui, &trash, footer_drag, "layer.delete"));
         actions.extend(fx_trash_drop(ui, &trash, fx_footer_drag));
+        // Photoshop asks "Apply mask to layer before removing?" (`mask_trash_prompt`).
+        if let Some(layer) = mask_footer_drag
+            && dropped_on(ui, &trash)
+        {
+            actions.push(crate::mask_trash_prompt::drop_action(layer));
+        }
         // A click follows the selected thumbnail; name that action for screen readers even
         // though dropping a whole layer row onto the same button always deletes the layer.
         trash.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(label)));
@@ -2550,9 +2564,14 @@ fn layer_row(
     // Photoshop's default (medium) thumbnails: 32 pt rows.
     let row_h = if t.pro { 32.0 } else { 46.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
+    // A drag from the layer mask's thumbnail drags the mask, not the layer (#3113).
+    let mask_drag = starts_mask_drag(ctx, l, &resp);
+    if mask_drag {
+        ctx.data_mut(|d| d.insert_temp(mask_drag_key(), l.id.0));
+    }
     layer_drag_and_drop(app, ctx, ui, l, rect, &resp, actions);
     fx_drop(ctx, ui, l, rect, actions);
-    if resp.drag_started() {
+    if resp.drag_started() && !mask_drag {
         crate::layer_transfer::begin_from_panel(app, ctx, l.id);
     }
     // Rows are painted: name them for screen readers and UI tests.
@@ -3521,7 +3540,9 @@ fn layer_drag_and_drop(
 ) {
     let t = Tokens::get(ctx);
     let key = egui::Id::new("layer-drag");
-    if resp.drag_started() {
+    // A drag from the mask thumbnail (`starts_mask_drag`) moves the mask, not the layer.
+    let mask_drag = ctx.data(|d| d.get_temp::<u64>(mask_drag_key())) == Some(l.id.0);
+    if resp.drag_started() && !mask_drag {
         ctx.data_mut(|d| d.insert_temp(key, l.id.0));
     }
     let Some(dragged) = ctx.data(|d| d.get_temp::<u64>(key)) else { return };
@@ -3639,6 +3660,21 @@ fn layer_drop_zone(
 /// An fx row being dragged: the layer it belongs to and the effect index (`None` = the "Effects"
 /// row, all of them).
 type FxDrag = (u64, Option<usize>);
+
+/// The layer whose mask thumbnail is being dragged (#3113).
+fn mask_drag_key() -> egui::Id {
+    egui::Id::new("mask-drag")
+}
+
+/// Does the row's drag start on its layer mask's thumbnail (where it was drawn last frame)?
+fn starts_mask_drag(ctx: &egui::Context, l: &Layer, resp: &egui::Response) -> bool {
+    if !resp.drag_started() || l.mask.is_none() {
+        return false;
+    }
+    let Some(p) = ctx.input(|i| i.pointer.press_origin()) else { return false };
+    crate::mask_thumbs_ui::recorded(ctx, l.id.0)
+        .is_some_and(|(thumbs, _)| thumbs.iter().any(|(k, r)| *k == crate::mask_thumbs_ui::MaskKind::Pixel && r.contains(p)))
+}
 
 fn fx_drag_key() -> egui::Id {
     egui::Id::new("fx-drag")

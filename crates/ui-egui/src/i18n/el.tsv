@@ -3710,6 +3710,8 @@ cameraData	Lens	Φακός
 	Fill with {mode}-neutral color (black)	Γέμισμα με το ουδέτερο χρώμα της λειτουργίας {mode} (μαύρο)
 	Fill with {mode}-neutral color (50% gray)	Γέμισμα με το ουδέτερο χρώμα της λειτουργίας {mode} (50% γκρι)
 	(No neutral color exists for {mode} mode.)	(Δεν υπάρχει ουδέτερο χρώμα για τη λειτουργία {mode}.)
+	Apply mask to layer before removing?	Εφαρμογή της μάσκας στο επίπεδο πριν από την αφαίρεση;
+	The layer or its mask changed. Drag the mask onto the Trash again.	Το επίπεδο ή η μάσκα του άλλαξε. Σύρετε ξανά τη μάσκα στον Κάδο.
 # View › Guides › New Guide… › Color
 	Light Blue	Ανοιχτό μπλε
 	Light Red	Ανοιχτό κόκκινο

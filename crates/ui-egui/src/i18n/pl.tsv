@@ -3624,6 +3624,8 @@ cameraData	Lens	Obiektyw
 	Fill with {mode}-neutral color (black)	Wypełnij kolorem neutralnym dla trybu {mode} (czarny)
 	Fill with {mode}-neutral color (50% gray)	Wypełnij kolorem neutralnym dla trybu {mode} (50% szarości)
 	(No neutral color exists for {mode} mode.)	(Dla trybu {mode} nie istnieje kolor neutralny.)
+	Apply mask to layer before removing?	Zastosować maskę do warstwy przed usunięciem?
+	The layer or its mask changed. Drag the mask onto the Trash again.	Warstwa lub jej maska uległa zmianie. Przeciągnij maskę ponownie do kosza.
 # View › Guides › New Guide… › Color
 	Light Blue	Jasnoniebieski
 	Light Red	Jasnoczerwony
