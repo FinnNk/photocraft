@@ -119,7 +119,7 @@ fn delete_removes_the_selected_guide_and_leaves_the_pixels() {
 }
 
 fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -263,4 +263,46 @@ fn edit_selected_guides_needs_a_selected_guide() {
     let mut app = app();
     assert!(crate::new_guide_ui::open_edit(&mut app).is_err());
     assert!(app.ui.dialogs.is_empty());
+}
+
+/// ⌥-click turns a guide through the point clicked, keeping its colour, as one undoable step, and
+/// leaves it selected; a locked guide can't be turned.
+#[test]
+fn alt_click_turns_a_guide_through_the_point_clicked() {
+    let mut app = app();
+    let alt = Modifiers::ALT;
+    tool_event(&mut app, ToolEvent::Down { x: 120.0, y: 30.0, pressure: 1.0 }, alt);
+    tool_event(&mut app, ToolEvent::Up { x: 120.0, y: 30.0 }, alt);
+    assert_eq!(guides(&app), (vec![50.0, 120.0], vec![]), "the magenta horizontal guide is now vertical at x = 120");
+    let g = &app.session.active().unwrap().doc.guides;
+    assert_eq!(g.color(true, 120.0), Some([0xff, 0x00, 0xff]));
+    assert_eq!(selected(&app), Some((true, 1)));
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Edit Guide"));
+    app.session.undo();
+    assert_eq!(guides(&app), (vec![50.0], vec![30.0]));
+    app.ui.extras.lock_guides = true;
+    tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 70.0, pressure: 1.0 }, alt);
+    tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 70.0 }, alt);
+    assert_eq!(guides(&app), (vec![50.0], vec![30.0]), "locked guides stay put");
+}
+
+/// Double-clicking a guide opens Preferences › Guides, Grid & Slices, as in Photoshop.
+#[test]
+fn double_click_on_a_guide_opens_the_guide_preferences() {
+    let mut h = harness(centred_guide_app());
+    let at = guide_on_screen(&h);
+    h.hover_at(at);
+    for _ in 0..40 {
+        h.step();
+    }
+    for _ in 0..2 {
+        h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.step();
+    }
+    h.run_steps(3);
+    let dialog = h.state().ui.dialogs.last().map(|d| serde_json::to_string(&d.fields).unwrap_or_default()).unwrap_or_default();
+    assert!(dialog.contains("guidesGridAndSlices"), "{dialog}");
+    assert_eq!(guides(h.state()).0, vec![100.0], "the guide didn't move");
 }

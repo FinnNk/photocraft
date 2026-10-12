@@ -69,6 +69,24 @@ pub fn delete_params(vertical: bool, index: usize) -> serde_json::Value {
     json!({"orientation": if vertical { "vertical" } else { "horizontal" }, "index": index})
 }
 
+/// ⌥-click on guide `index`: turn it, so a vertical guide becomes horizontal through the point
+/// clicked (`at`, document pixels) and the other way round, as one undoable step (`view.editGuide`);
+/// it stays selected.
+pub fn flip(app: &mut PhotocraftApp, vertical: bool, index: usize, at: [f64; 2]) {
+    let (from, to) = if vertical { ("vertical", "horizontal") } else { ("horizontal", "vertical") };
+    let position = if vertical { at[1] } else { at[0] };
+    let params = json!({"orientation": from, "index": index, "newOrientation": to, "position": (position * 1000.0).round() / 1000.0});
+    match app.run("view.editGuide", params) {
+        Ok(_) => {
+            let last = app.session.active().map(|st| if vertical { st.doc.guides.horizontal.len() } else { st.doc.guides.vertical.len() });
+            if let Some(n) = last.and_then(|n| n.checked_sub(1)) {
+                select(app, !vertical, n);
+            }
+        }
+        Err(e) => app.ui.status = e,
+    }
+}
+
 /// Delete or Backspace with no modifiers while a guide is selected deletes the guide, before Edit ›
 /// Clear can reach the pixels, as in Photoshop.
 pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
