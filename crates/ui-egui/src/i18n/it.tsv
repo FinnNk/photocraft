@@ -2684,6 +2684,7 @@ cameraData	Lens	Obiettivo
 	(No neutral color exists for {mode} mode.)	(Non esiste un colore neutro per il metodo {mode}.)
 	Apply mask to layer before removing?	Applicare la maschera al livello prima di rimuoverla?
 	The layer or its mask changed. Drag the mask onto the Trash again.	Il livello o la sua maschera è cambiato. Trascina di nuovo la maschera nel cestino.
+	Delete the vector mask?	Eliminare la maschera vettoriale?
 # View › Guides › New Guide… › Color
 	Light Blue	Blu chiaro
 	Light Red	Rosso chiaro

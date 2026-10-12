@@ -5,6 +5,7 @@ use photocraft_color::BlendMode;
 use photocraft_doc::{Layer, LayerContent, LayerId};
 use serde_json::{Value, json};
 
+use crate::mask_thumbs_ui::MaskKind;
 use crate::state::Tool;
 use crate::theme::{self, Tokens};
 use crate::{PhotocraftApp, icons, widgets};
@@ -2196,7 +2197,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // An fx drag that never saw its release (the panel was hidden) must not outlive the button.
             if !ctx.input(|i| i.pointer.primary_down() || i.pointer.any_released()) {
                 ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
-                ctx.data_mut(|d| d.remove::<u64>(mask_drag_key()));
+                ctx.data_mut(|d| d.remove::<MaskDrag>(mask_drag_key()));
             }
             let held = ctx.data(|d| d.get_temp::<u64>(egui::Id::new("layer-drag")).is_some() || d.get_temp::<FxDrag>(fx_drag_key()).is_some());
             let dragging = held && ctx.input(|i| i.pointer.primary_down());
@@ -2269,20 +2270,21 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let in_selection = selection.iter().any(|s| s.0 == id);
         (id, in_selection)
     });
-    // An effect row can be dropped on Delete too (#3102), and a layer mask's thumbnail (#3113).
+    // An effect row can be dropped on Delete too (#3102), and a mask's thumbnail (#3113, #3119).
     let fx_footer_drag = ctx.data(|d| d.get_temp::<FxDrag>(fx_drag_key()));
     fx_drag_feedback(&ctx, &doc);
-    let mask_footer_drag = ctx.data(|d| d.get_temp::<u64>(mask_drag_key()));
-    if mask_footer_drag.is_some()
+    let mask_footer_drag = ctx.data(|d| d.get_temp::<MaskDrag>(mask_drag_key()));
+    if let Some((_, kind)) = mask_footer_drag
         && let Some(p) = ctx.input(|i| i.pointer.interact_pos())
     {
-        crate::layer_transfer::ghost(&ctx, p, tl!("Layer Mask"));
+        let label = if kind == MaskKind::Vector { tl!("Vector Mask") } else { tl!("Layer Mask") };
+        crate::layer_transfer::ghost(&ctx, p, label);
     }
     // End any layer drag after every row has had a chance to accept the drop.
     if ctx.input(|i| i.pointer.any_released()) {
         ctx.data_mut(|d| d.remove::<u64>(egui::Id::new("layer-drag")));
         ctx.data_mut(|d| d.remove::<FxDrag>(fx_drag_key()));
-        ctx.data_mut(|d| d.remove::<u64>(mask_drag_key()));
+        ctx.data_mut(|d| d.remove::<MaskDrag>(mask_drag_key()));
     }
     widgets::panel_footer(ui, |ui| {
         let active_layer = active.and_then(|id| doc.layer(id));
@@ -2302,11 +2304,12 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         actions.extend(footer_drop(ui, &trash, footer_drag, "layer.delete"));
         actions.extend(fx_trash_drop(ui, &trash, fx_footer_drag));
-        // Photoshop asks "Apply mask to layer before removing?" (`mask_trash_prompt`).
-        if let Some(layer) = mask_footer_drag
+        // Photoshop asks "Apply mask to layer before removing?" or "Delete the vector mask?"
+        // (`mask_trash_prompt`).
+        if let Some((layer, kind)) = mask_footer_drag
             && dropped_on(ui, &trash)
         {
-            actions.push(crate::mask_trash_prompt::drop_action(layer));
+            actions.push(crate::mask_trash_prompt::drop_action(layer, kind));
         }
         // A click follows the selected thumbnail; name that action for screen readers even
         // though dropping a whole layer row onto the same button always deletes the layer.
@@ -2564,11 +2567,12 @@ fn layer_row(
     // Photoshop's default (medium) thumbnails: 32 pt rows.
     let row_h = if t.pro { 32.0 } else { 46.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
-    // A drag from the layer mask's thumbnail drags the mask, not the layer (#3113).
+    // A drag from a mask's thumbnail drags that mask, not the layer (#3113, #3119).
     let mask_drag = starts_mask_drag(ctx, l, &resp);
-    if mask_drag {
-        ctx.data_mut(|d| d.insert_temp(mask_drag_key(), l.id.0));
+    if let Some(kind) = mask_drag {
+        ctx.data_mut(|d| d.insert_temp::<MaskDrag>(mask_drag_key(), (l.id.0, kind)));
     }
+    let mask_drag = mask_drag.is_some();
     layer_drag_and_drop(app, ctx, ui, l, rect, &resp, actions);
     fx_drop(ctx, ui, l, rect, actions);
     if resp.drag_started() && !mask_drag {
@@ -3541,7 +3545,7 @@ fn layer_drag_and_drop(
     let t = Tokens::get(ctx);
     let key = egui::Id::new("layer-drag");
     // A drag from the mask thumbnail (`starts_mask_drag`) moves the mask, not the layer.
-    let mask_drag = ctx.data(|d| d.get_temp::<u64>(mask_drag_key())) == Some(l.id.0);
+    let mask_drag = ctx.data(|d| d.get_temp::<MaskDrag>(mask_drag_key())).is_some_and(|(id, _)| id == l.id.0);
     if resp.drag_started() && !mask_drag {
         ctx.data_mut(|d| d.insert_temp(key, l.id.0));
     }
@@ -3661,19 +3665,26 @@ fn layer_drop_zone(
 /// row, all of them).
 type FxDrag = (u64, Option<usize>);
 
-/// The layer whose mask thumbnail is being dragged (#3113).
+/// A mask thumbnail being dragged: the layer and which of its masks (#3113, #3119).
+type MaskDrag = (u64, MaskKind);
+
 fn mask_drag_key() -> egui::Id {
     egui::Id::new("mask-drag")
 }
 
-/// Does the row's drag start on its layer mask's thumbnail (where it was drawn last frame)?
-fn starts_mask_drag(ctx: &egui::Context, l: &Layer, resp: &egui::Response) -> bool {
-    if !resp.drag_started() || l.mask.is_none() {
-        return false;
+/// Which mask's thumbnail (where it was drawn last frame) the row's drag starts on, if any.
+fn starts_mask_drag(ctx: &egui::Context, l: &Layer, resp: &egui::Response) -> Option<MaskKind> {
+    if !resp.drag_started() {
+        return None;
     }
-    let Some(p) = ctx.input(|i| i.pointer.press_origin()) else { return false };
-    crate::mask_thumbs_ui::recorded(ctx, l.id.0)
-        .is_some_and(|(thumbs, _)| thumbs.iter().any(|(k, r)| *k == crate::mask_thumbs_ui::MaskKind::Pixel && r.contains(p)))
+    let p = ctx.input(|i| i.pointer.press_origin())?;
+    let (thumbs, _) = crate::mask_thumbs_ui::recorded(ctx, l.id.0)?;
+    let kind = thumbs.iter().find(|(_, r)| r.contains(p))?.0;
+    let present = match kind {
+        MaskKind::Pixel => l.mask.is_some(),
+        MaskKind::Vector => l.vector_mask.is_some(),
+    };
+    present.then_some(kind)
 }
 
 fn fx_drag_key() -> egui::Id {

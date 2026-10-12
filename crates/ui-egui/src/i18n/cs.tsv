@@ -3649,6 +3649,7 @@ navigator	Zoom	Zvětšení
 	(No neutral color exists for {mode} mode.)	(Pro režim {mode} neexistuje neutrální barva.)
 	Apply mask to layer before removing?	Použít masku na vrstvu před odstraněním?
 	The layer or its mask changed. Drag the mask onto the Trash again.	Vrstva nebo její maska se změnila. Přetáhněte masku do koše znovu.
+	Delete the vector mask?	Odstranit vektorovou masku?
 # View › Guides › New Guide… › Color
 	Light Blue	Světle modrá
 	Light Red	Světle červená

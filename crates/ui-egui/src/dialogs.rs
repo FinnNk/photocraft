@@ -317,7 +317,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         let clicked = if d.kind == DialogKind::Command && crate::prefs_ui::is_preferences(&fields) {
                             let changed = crate::prefs_ui::preferences_changed(app, &fields);
                             dialog_buttons(ui, &[ok, cancel, DialogButton::new(ButtonRole::Apply, tl!("Apply"), 84.0).enabled(changed)])
-                        } else if crate::mask_trash_prompt::owns(&fields) {
+                        } else if crate::mask_trash_prompt::owns(&fields) && !crate::mask_trash_prompt::is_vector(&fields) {
                             // Photoshop: Apply / Cancel / Delete. Delete answers with the choice set.
                             let apply = DialogButton::new(ButtonRole::Default, tl!("Apply"), 84.0).enabled(crate::mask_trash_prompt::can_apply(&fields));
                             let delete = DialogButton::new(ButtonRole::Alternate, tl!("Delete"), 84.0);

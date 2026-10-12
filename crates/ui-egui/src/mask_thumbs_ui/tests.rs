@@ -175,7 +175,8 @@ fn dragging_a_layer_row_to_trash_still_deletes_the_layer_with_a_mask_targeted() 
     let mut h = harness(s, 0, 1.0, 290.0);
     let mask = recorded(&h.ctx, masked).unwrap().0.into_iter().find(|(k, _)| *k == MaskKind::Pixel).unwrap().1;
     click_with(&mut h, mask.center(), Modifiers::NONE);
-    let from = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().row.center();
+    // Grab the row by its name: its thumbnails drag their masks (#3113, #3119).
+    let from = crate::layer_row_ui::recorded(&h.ctx).into_iter().find(|r| r.layer == masked).unwrap().name.unwrap().center();
     let to = h.get_by_label("Delete Layer Mask").rect().center();
     h.hover_at(from);
     h.run_steps(1);
@@ -241,6 +242,48 @@ fn dragging_the_mask_thumbnail_to_trash_asks_to_apply_or_delete_it() {
     crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
     assert!(layer(&h, masked).mask.is_none());
     assert_eq!(pixels(&h), before);
+}
+
+/// #3119: dragging the vector mask's thumbnail onto the Trash asks "Delete the vector mask?" and
+/// keeps the layer; Cancel keeps the mask, OK deletes only the vector mask in one step.
+#[test]
+fn dragging_the_vector_mask_thumbnail_to_trash_asks_to_delete_just_the_mask() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let drag_vector_mask = |h: &mut Harness<'_, PhotocraftApp>| {
+        let from = recorded(&h.ctx, masked).unwrap().0.into_iter().find(|(k, _)| *k == MaskKind::Vector).unwrap().1.center();
+        click_with(h, from, Modifiers::NONE);
+        let to = h.get_by_label("Delete Vector Mask").rect().center();
+        h.hover_at(from);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for k in 1..=8 {
+            h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        h.event(egui::Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        let st = h.state().session.active().unwrap();
+        assert!(st.doc.layer(photocraft_doc::LayerId(masked)).is_some(), "the layer is not deleted");
+        let d = h.state().ui.dialogs.iter().find(|d| crate::mask_trash_prompt::owns(&d.fields)).expect("the prompt is open");
+        assert_eq!(d.fields["message"], "Delete the vector mask?");
+        assert!(layer(h, masked).vector_mask.is_some(), "nothing changes before the answer");
+        d.id
+    };
+    let past = h.state().session.active().unwrap().history.past_len();
+    // Cancel keeps the vector mask.
+    let dialog = drag_vector_mask(&mut h);
+    crate::dialogs::cancel(h.state_mut(), dialog).unwrap();
+    assert!(layer(&h, masked).vector_mask.is_some());
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), past);
+    // OK: one step, only the vector mask is gone.
+    let dialog = drag_vector_mask(&mut h);
+    crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+    let after = layer(&h, masked);
+    assert!(after.vector_mask.is_none());
+    assert!(after.mask.is_some(), "the layer mask stays");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), past + 1);
 }
 
 #[test]
