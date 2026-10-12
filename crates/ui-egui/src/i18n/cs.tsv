@@ -3661,6 +3661,9 @@ navigator	Zoom	Zvětšení
 	Light Blue	Světle modrá
 	Light Red	Světle červená
 	Medium Blue	Středně modrá
+	Remove after each stroke	Odstranit po každém tahu
+	Apply the removal ({key})	Použít odstranění ({key})
+	Strokes to remove: {n} (Enter applies, Esc cancels)	Tahy k odstranění: {n} (Enter použije, Esc zruší)
 
 # View › Guides › right-click a guide
 	Edit Selected Guides	Upravit vybraná vodítka
