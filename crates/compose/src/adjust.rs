@@ -3,8 +3,8 @@
 //! Formulas are documented approximations of Photoshop behaviour. Exact matching is tuned in
 //! milestone M7 against Photoshop-rendered PSD composites (the oracle in `testkit`).
 
-use photocraft_color::SampleType;
-use photocraft_color::convert::{D50, SRGB_TO_XYZ_D50, XYZ_D50_TO_SRGB, mat3_mul, rgb_to_gray, srgb_to_linear};
+use photocraft_color::convert::{D50, SRGB_TO_XYZ_D50, XYZ_D50_TO_SRGB, lab_to_srgb, mat3_mul, rgb_to_gray, srgb_to_lab, srgb_to_linear};
+use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::Adjustment;
 use photocraft_doc::adjust::{CurvePoint, HueRange, LevelsChannel, ToneSpace, lut3d_len};
 
@@ -92,11 +92,8 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
             // 27.11, brightness +40 with contrast +30 maps 128 to 185 (brightness first), while
             // the corpus's brightness -23 with contrast -26 (psd-tools) needs contrast first;
             // contrast 80 keeps 128 at 128 (a 0.5 pivot moved it to 130).
-            let b = brightness / 255.0;
-            let c = contrast.clamp(-100.0, 99.0);
-            let k = if c >= 0.0 { 1.0 / (1.0 - c / 100.0) } else { 1.0 + c / 100.0 };
-            let (pre, post) = if c >= 0.0 { (b, 0.0) } else { (0.0, b) };
-            map_rgb(buf, |px| px.map(|v| ((v + pre - LEGACY_PIVOT) * k + LEGACY_PIVOT + post).clamp(0.0, 1.0)))
+            let f = legacy_brightness_contrast(*brightness, *contrast);
+            map_rgb(buf, |px| px.map(&f))
         }
         Adjustment::BrightnessContrast { brightness, contrast, .. } => {
             // Modern (CS3+) Brightness/Contrast, reverse-engineered from Photoshop ground truth
@@ -236,6 +233,99 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
     }
 }
 
+/// Legacy Brightness/Contrast as one channel's tone curve (see [`apply_depth`]).
+fn legacy_brightness_contrast(brightness: f32, contrast: f32) -> impl Fn(f32) -> f32 {
+    let b = brightness / 255.0;
+    let c = contrast.clamp(-100.0, 99.0);
+    let k = if c >= 0.0 { 1.0 / (1.0 - c / 100.0) } else { 1.0 + c / 100.0 };
+    let (pre, post) = if c >= 0.0 { (b, 0.0) } else { (0.0, b) };
+    move |v: f32| ((v + pre - LEGACY_PIVOT) * k + LEGACY_PIVOT + post).clamp(0.0, 1.0)
+}
+
+/// Applies an adjustment in a document of colour `mode`: [`apply_depth`], except that in Lab
+/// documents the adjustments Photoshop evaluates on the L, a and b channels do so (see
+/// [`lab_channel_adjustment`]).
+pub fn apply_in(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: Option<SampleType>, mode: ColorMode) {
+    if mode == ColorMode::Lab && lab_channel_adjustment(adj) {
+        apply_lab(adj, buf);
+    } else {
+        apply_depth(adj, buf, transfer, depth);
+    }
+}
+
+/// Whether a Lab document evaluates `adj` on its L, a and b channels rather than on the screen
+/// colour: Invert and Posterize (L, a and b alike), Brightness/Contrast (L only), Threshold
+/// (split on L, neutral result) and Gradient Map (driven by L). Levels and Curves carry their own
+/// Lab records ([`ToneSpace::Lab`]); everything else stays on the screen colour.
+pub fn lab_channel_adjustment(adj: &Adjustment) -> bool {
+    matches!(
+        adj,
+        Adjustment::Invert
+            | Adjustment::Posterize { .. }
+            | Adjustment::Threshold { .. }
+            | Adjustment::BrightnessContrast { .. }
+            | Adjustment::GradientMap { .. }
+    )
+}
+
+/// Encoded sRGB → Lab normalised the way Photoshop's channels hold it: L/100, (a+128)/255,
+/// (b+128)/255.
+fn lab_norm(c: [f32; 3]) -> [f32; 3] {
+    let l = srgb_to_lab(c);
+    [l[0] / 100.0, (l[1] + 128.0) / 255.0, (l[2] + 128.0) / 255.0]
+}
+
+/// The inverse of [`lab_norm`].
+fn lab_denorm(n: [f32; 3]) -> [f32; 3] {
+    lab_to_srgb([n[0] * 100.0, n[1] * 255.0 - 128.0, n[2] * 255.0 - 128.0])
+}
+
+/// The Lab evaluation of a [`lab_channel_adjustment`] (no-op for any other adjustment).
+fn apply_lab(adj: &Adjustment, buf: &mut Buffer) {
+    match adj {
+        // n → 1 - n on every channel: L → 100 - L and a, b mirrored about neutral.
+        Adjustment::Invert => map_rgb(buf, |c| lab_denorm(lab_norm(c).map(|v| 1.0 - v.clamp(0.0, 1.0)))),
+        Adjustment::Posterize { levels } => map_rgb(buf, |c| lab_denorm(lab_norm(c).map(|v| posterize(v, *levels)))),
+        Adjustment::Threshold { level } => {
+            // Split on L alone (on the 8-bit grid); the result is neutral black or white.
+            let t = (level * 255.0).round();
+            map_rgb(buf, |c| [if (lab_norm(c)[0].clamp(0.0, 1.0) * 255.0).round() >= t { 1.0 } else { 0.0 }; 3])
+        }
+        Adjustment::BrightnessContrast { brightness, contrast, legacy } => {
+            let legacy_curve = legacy_brightness_contrast(*brightness, *contrast);
+            let curve = |v: f32| if *legacy { legacy_curve(v) } else { modern_contrast(modern_brightness(v, *brightness), *contrast).clamp(0.0, 1.0) };
+            // The tone curve on L only. Added as the difference of two round trips (like
+            // `tone_in_space`) so a and b, and colours a round trip moves, stay put.
+            map_rgb(buf, |c| {
+                let n = lab_norm(c);
+                let l = curve(n[0]);
+                if l == n[0] {
+                    return c;
+                }
+                let (before, after) = (lab_denorm(n), lab_denorm([l, n[1], n[2]]));
+                std::array::from_fn(|i| (c[i] + after[i] - before[i]).clamp(0.0, 1.0))
+            })
+        }
+        Adjustment::GradientMap { stops, reverse, dither } => {
+            let (w, x0, y0) = (buf.rect.width().max(1) as usize, buf.rect.x0, buf.rect.y0);
+            for (i, p) in buf.px.iter_mut().enumerate() {
+                if p[3] <= 0.0 {
+                    continue;
+                }
+                // Driven by L: equal lightness maps to the same stop colour whatever the chroma.
+                let l = lab_norm([p[0], p[1], p[2]])[0].clamp(0.0, 1.0);
+                let mut o = gradient(stops, if *reverse { 1.0 - l } else { l });
+                if *dither {
+                    let d = bayer4(x0 + (i % w) as i32, y0 + (i / w) as i32) / 255.0;
+                    o = o.map(|v| (v + d).clamp(0.0, 1.0));
+                }
+                p[..3].copy_from_slice(&o);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Float RGB curve channels with no edit must preserve samples outside the LUT domain.
 /// Edited curves retain the existing spline/LUT behaviour until HDR extrapolation has an oracle.
 pub fn float_tone_identity(adj: &Adjustment, depth: Option<SampleType>) -> [bool; 3] {
@@ -293,7 +383,7 @@ pub fn tone_luts_depth(adj: &Adjustment, depth: Option<SampleType>) -> [Vec<f32>
 /// through the conversions the document's surfaces use. The change is added as a difference of
 /// two round trips, so channels a curve leaves alone (and out-of-gamut colours) stay exact.
 fn tone_in_space(space: ToneSpace, luts: &[Vec<f32>; 4], c: [f32; 3]) -> [f32; 3] {
-    use photocraft_color::convert::{cmyk_to_rgb, lab_to_srgb, rgb_to_cmyk, srgb_to_lab};
+    use photocraft_color::convert::{cmyk_to_rgb, rgb_to_cmyk};
     let (before, after) = match space {
         ToneSpace::Cmyk => {
             let ink = rgb_to_cmyk(c);
@@ -1213,6 +1303,106 @@ mod tone_tests {
         apply(&Adjustment::GradientMap { stops, reverse: false, dither: true }, &mut b);
         assert!(a.px.iter().zip(&b.px).all(|(x, y)| (x[0] - y[0]).abs() <= 0.5 / 255.0 + 1e-6));
         assert!(a.px.iter().zip(&b.px).any(|(x, y)| x[0] != y[0]));
+    }
+
+    /// `adj` applied in a Lab document to one encoded sRGB colour, returned as (L, a, b).
+    fn in_lab(adj: &Adjustment, c: [f32; 3]) -> [f32; 3] {
+        let mut b = Buffer::filled(crate::Rect::new(0, 0, 1, 1), [c[0], c[1], c[2], 1.0]);
+        apply_in(adj, &mut b, Transfer::Srgb, Some(SampleType::U8), ColorMode::Lab);
+        srgb_to_lab([b.px[0][0], b.px[0][1], b.px[0][2]])
+    }
+
+    /// A muted, in-gamut colour from (L, a, b).
+    fn lab(l: f32, a: f32, b: f32) -> [f32; 3] {
+        lab_to_srgb([l, a, b])
+    }
+
+    fn near(got: [f32; 3], want: [f32; 3], tol: f32) -> bool {
+        got.iter().zip(want).all(|(g, w)| (g - w).abs() <= tol)
+    }
+
+    #[test]
+    fn lab_invert_flips_l_a_and_b() {
+        let got = in_lab(&Adjustment::Invert, lab(30.0, 12.0, -18.0));
+        // n -> 1 - n: L -> 100 - L, a -> -a - 1, b -> -b - 1 (mirrored on the 0..255 grid).
+        assert!(near(got, [70.0, -13.0, 17.0], 0.6), "{got:?}");
+        // On the screen colour it would not be a mirror in Lab.
+        let mut rgb = Buffer::filled(crate::Rect::new(0, 0, 1, 1), [0.0, 0.0, 0.0, 1.0]);
+        let c = lab(30.0, 12.0, -18.0);
+        rgb.px[0] = [c[0], c[1], c[2], 1.0];
+        apply(&Adjustment::Invert, &mut rgb);
+        assert!(!near(srgb_to_lab([rgb.px[0][0], rgb.px[0][1], rgb.px[0][2]]), got, 1.0));
+    }
+
+    #[test]
+    fn lab_posterize_steps_l_a_and_b() {
+        let got = in_lab(&Adjustment::Posterize { levels: 2 }, lab(70.0, 20.0, -30.0));
+        // Two levels: each normalised channel snaps to 0 or 1 (L 100, a and b at +127 / -128).
+        assert!(near(got, srgb_to_lab(lab_denorm([1.0, 1.0, 0.0])), 1e-3), "{got:?}");
+        let grey = in_lab(&Adjustment::Posterize { levels: 255 }, lab(50.0, 0.0, 0.0));
+        assert!(near(grey, [50.0, 0.0, 0.0], 1.1), "255 levels is within a step of the identity: {grey:?}");
+    }
+
+    #[test]
+    fn lab_threshold_splits_on_l_with_a_neutral_result() {
+        let t = Adjustment::Threshold { level: 0.5 };
+        // A saturated blue (L ≈ 32) and yellow (L ≈ 97): black and white, nothing in between.
+        for (c, white) in [([0.0, 0.0, 1.0], false), ([1.0, 1.0, 0.0], true), (lab(52.0, 40.0, 30.0), true), (lab(48.0, -40.0, 30.0), false)] {
+            let mut b = Buffer::filled(crate::Rect::new(0, 0, 1, 1), [c[0], c[1], c[2], 1.0]);
+            apply_in(&t, &mut b, Transfer::Srgb, None, ColorMode::Lab);
+            let v = if white { 1.0 } else { 0.0 };
+            assert_eq!(b.px[0], [v, v, v, 1.0], "{c:?}");
+        }
+    }
+
+    #[test]
+    fn lab_brightness_contrast_moves_l_only() {
+        for legacy in [false, true] {
+            let adj = Adjustment::BrightnessContrast { brightness: 40.0, contrast: 30.0, legacy };
+            let before = [45.0, 15.0, -20.0];
+            let got = in_lab(&adj, lab(before[0], before[1], before[2]));
+            assert!(got[0] > before[0] + 5.0, "{legacy}: L rises: {got:?}");
+            assert!((got[1] - before[1]).abs() < 0.5 && (got[2] - before[2]).abs() < 0.5, "{legacy}: a, b kept: {got:?}");
+        }
+    }
+
+    #[test]
+    fn lab_gradient_map_follows_l() {
+        let stops = vec![(0.0, [1.0, 0.0, 0.0]), (1.0, [0.0, 0.0, 1.0])];
+        for reverse in [false, true] {
+            let map = Adjustment::GradientMap { stops: stops.clone(), reverse, dither: false };
+            // A grey and a saturated colour with the same L map to the same colour.
+            let grey = in_lab(&map, lab(60.0, 0.0, 0.0));
+            let green = in_lab(&map, lab(60.0, -50.0, 40.0));
+            assert!(near(grey, green, 1e-3), "{reverse}: {grey:?} vs {green:?}");
+            let t = if reverse { 0.4 } else { 0.6 };
+            let want = srgb_to_lab([1.0 - t, 0.0, t]);
+            assert!(near(grey, want, 0.05), "{reverse}: {grey:?} vs {want:?}");
+        }
+    }
+
+    #[test]
+    fn other_modes_and_adjustments_keep_the_screen_colour_path() {
+        let c = [0.2, 0.5, 0.7, 1.0];
+        let lab_only = [Adjustment::Invert, Adjustment::Threshold { level: 0.47 }, Adjustment::Posterize { levels: 4 }];
+        for adj in
+            lab_only.iter().chain([&Adjustment::HueSaturation { hue: 30.0, saturation: 0.0, lightness: 0.0, colorize: false, ranges: HueRange::defaults() }])
+        {
+            for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Grayscale, ColorMode::Lab] {
+                let (mut a, mut b) = (Buffer::filled(crate::Rect::new(0, 0, 1, 1), c), Buffer::filled(crate::Rect::new(0, 0, 1, 1), c));
+                apply_in(adj, &mut a, Transfer::Srgb, None, mode);
+                apply_depth(adj, &mut b, Transfer::Srgb, None);
+                assert_eq!(a.px == b.px, mode != ColorMode::Lab || !lab_channel_adjustment(adj), "{adj:?} in {mode:?}");
+            }
+        }
+        // Transparent pixels are left alone and odd values never panic.
+        let mut t = Buffer::filled(crate::Rect::new(0, 0, 2, 1), [f32::NAN, 2.0, -1.0, 0.0]);
+        for adj in lab_only.iter().chain([&Adjustment::GradientMap { stops: vec![], reverse: true, dither: true }]) {
+            apply_in(adj, &mut t, Transfer::Srgb, None, ColorMode::Lab);
+            let mut odd = Buffer::filled(crate::Rect::new(0, 0, 1, 1), [f32::NAN, f32::INFINITY, -3.0, 1.0]);
+            apply_in(adj, &mut odd, Transfer::Srgb, None, ColorMode::Lab);
+        }
+        assert!(t.px[0][1] == 2.0);
     }
 }
 

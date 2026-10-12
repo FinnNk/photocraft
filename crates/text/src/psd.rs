@@ -24,8 +24,10 @@ pub struct TySh {
     pub transform: Affine,
     pub text: Descriptor,
     pub warp: Option<Descriptor>,
-    /// The four trailing i32 values (left, top, right, bottom).
-    pub bounds: [i32; 4],
+    /// The four trailing big-endian f32 values (left, top, right, bottom) after the warp
+    /// descriptor. Photoshop writes zeros for unwarped type and the text-space bounds (the
+    /// `bounds` descriptor's rectangle) for warped type.
+    pub bounds: [f32; 4],
 }
 
 /// Parses a `TySh` block.
@@ -42,10 +44,10 @@ pub fn parse_tysh(data: &[u8]) -> Option<TySh> {
         None => (None, 0),
     };
     let tail = rest.get(wused..).unwrap_or(&[]);
-    let mut bounds = [0i32; 4];
+    let mut bounds = [0f32; 4];
     for (i, b) in bounds.iter_mut().enumerate() {
         if let Some(x) = tail.get(i * 4..i * 4 + 4) {
-            *b = i32::from_be_bytes(x.try_into().unwrap_or([0; 4]));
+            *b = f32::from_be_bytes(x.try_into().unwrap_or([0; 4]));
         }
     }
     Some(TySh { transform: Affine { m }, text: text.descriptor, warp, bounds })
@@ -138,9 +140,11 @@ pub fn parse_txt2(data: &[u8]) -> Option<E> {
     ed::parse(&wrapped).ok().filter(|v| matches!(v, E::Dict(_)))
 }
 
-/// Applies the automatic kerning modes that Photoshop keeps only in `Txt2` (EngineData writes
-/// Optical and "0" alike as `AutoKerning true`) to `layer`, read from `tysh`. Only when the
-/// layer's `TextIndex` entry still holds the layer's text (an edit elsewhere leaves `Txt2`
+/// Applies what Photoshop keeps only in `Txt2` to `layer`, read from `tysh`: the automatic
+/// kerning modes (EngineData writes Optical and "0" alike as `AutoKerning true`) and the
+/// OpenType settings besides (discretionary) ligatures: stylistic sets, contextual alternates,
+/// swashes and the rest ([`TXT2_FEATURES`]), which Photoshop leaves out of EngineData. Only when
+/// the layer's `TextIndex` entry still holds the layer's text (an edit elsewhere leaves `Txt2`
 /// stale).
 ///
 /// Observed layout: `Txt2 /1` is the list of text objects; an object's `/0` is its text model
@@ -166,11 +170,10 @@ pub fn apply_txt2(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
     let Some(style_runs) = model.path(&["6", "0"]).and_then(E::as_array) else {
         return;
     };
-    let modes: Vec<(f64, Option<i64>)> =
-        style_runs.iter().map(|r| (r.get("1").and_then(E::as_f64).unwrap_or(0.0), r.path(&["0", "0", "6", "11"]).and_then(E::as_i64))).collect();
-    let lens = utf16_to_byte_lengths(text, &modes.iter().map(|m| m.0).collect::<Vec<_>>());
-    // Auto-kern mode per byte segment, then split the model runs at segment boundaries.
-    let mut segs: Vec<(usize, Option<i64>)> = lens.into_iter().zip(modes.iter().map(|m| m.1)).collect();
+    let styles: Vec<(f64, Option<&E>)> = style_runs.iter().map(|r| (r.get("1").and_then(E::as_f64).unwrap_or(0.0), r.path(&["0", "0", "6"]))).collect();
+    let lens = utf16_to_byte_lengths(text, &styles.iter().map(|m| m.0).collect::<Vec<_>>());
+    // Txt2 style per byte segment, then split the model runs at segment boundaries.
+    let mut segs: Vec<(usize, Option<&E>)> = lens.into_iter().zip(styles.iter().map(|m| m.1)).collect();
     segs.retain(|s| s.0 > 0);
     let runs = layer.char_runs();
     let mut out: Vec<TextRun> = Vec::new();
@@ -185,13 +188,17 @@ pub fn apply_txt2(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
             }
             let piece_end = if at < seg_end { end.min(seg_end) } else { end };
             let mut style = r.style.clone();
+            let txt2_style = segs.get(si).and_then(|s| s.1).filter(|_| at < seg_end);
             // Txt2 has the exact mode (EngineData's reading also marks neighbours of manual
             // kerns manual, like Photoshop's legacy reader).
-            match segs.get(si).and_then(|s| s.1).filter(|_| at < seg_end) {
+            match txt2_style.and_then(|st| st.get("11")).and_then(E::as_i64) {
                 Some(0) => style.kerning = Kerning::Off,
                 Some(1) => style.kerning = Kerning::Metrics,
                 Some(2) => style.kerning = Kerning::Optical,
                 _ => {}
+            }
+            if let Some(st) = txt2_style {
+                add_txt2_features(&mut style, st);
             }
             let len = piece_end - at;
             match out.last_mut() {
@@ -203,6 +210,43 @@ pub fn apply_txt2(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
     }
     layer.runs = out;
     layer.sync_summary();
+}
+
+/// OpenType settings of a `Txt2` style that are on/off flags, by style key, as Photoshop
+/// writes them (each turned on alone in the Character panel's OpenType settings and read back):
+/// `/20` Contextual Alternates, `/23` Fractions, `/24` Ordinals, `/25` Swash, `/26` Titling
+/// Alternates, `/28` Stylistic Alternates, `/29` Ornaments. (`/18` and `/19` are the standard and
+/// discretionary ligatures, which EngineData carries too; `/27` is Arabic connection forms.)
+pub const TXT2_FEATURES: [(&str, &str); 7] = [("20", "calt"), ("23", "frac"), ("24", "ordn"), ("25", "swsh"), ("26", "titl"), ("28", "salt"), ("29", "ornm")];
+
+/// The `Txt2` style key holding the Stylistic Sets as a bit mask: bit n is set n + 1
+/// (`ss01`..`ss20`).
+pub const TXT2_STYLISTIC_SETS: &str = "85";
+
+/// Sets in `style` the OpenType features a `Txt2` style dictionary turns on ([`TXT2_FEATURES`]
+/// and the Stylistic Sets mask). A feature the style already sets keeps its value. A flag that is
+/// off changes nothing, except Contextual Alternates: shapers apply `calt` by default, Photoshop
+/// only when it is on (its default is off), so off is written as `calt` 0.
+fn add_txt2_features(style: &mut CharStyle, txt2_style: &E) {
+    let mut set = |tag: String, value: u16| {
+        if !style.features.iter().any(|f| f.tag == tag) {
+            style.features.push(photocraft_doc::text::FontFeature { tag, value });
+        }
+    };
+    for (key, tag) in TXT2_FEATURES {
+        match txt2_style.get(key).and_then(E::as_bool) {
+            Some(true) => set(tag.to_string(), 1),
+            Some(false) if tag == "calt" => set(tag.to_string(), 0),
+            _ => {}
+        }
+    }
+    // A mask beyond the 20 sets is not Photoshop's: ignore it.
+    let sets = txt2_style.get(TXT2_STYLISTIC_SETS).and_then(E::as_i64).filter(|m| (0..1 << 20).contains(m)).unwrap_or(0);
+    for n in 0..20 {
+        if sets & (1 << n) != 0 {
+            set(format!("ss{:02}", n + 1), 1);
+        }
+    }
 }
 
 /// Builds a [`TextLayer`] (model, text and transform; no cache, no `psd_raw`) from `TySh` data.
@@ -221,7 +265,11 @@ pub fn text_layer_from_tysh(data: &[u8], dpi: f32) -> Option<TextLayer> {
         Some("AnSt" | "antiAliasStrong") => AntiAlias::Strong,
         Some("antiAliasPlatformGray") => AntiAlias::Windows,
         Some("antiAliasPlatformLCD") => AntiAlias::WindowsLcd,
-        _ => AntiAlias::Smooth,
+        Some(_) => AntiAlias::Smooth,
+        // No `AntA`: the engine data's mode says it.
+        None => {
+            engine_data(&t.text).and_then(|e| e.path(&["EngineDict", "AntiAlias"]).and_then(E::as_f64)).and_then(engine_antialias).unwrap_or(AntiAlias::Smooth)
+        }
     };
     if let Some(w) = &t.warp {
         let style = enum_value(w, "warpStyle").unwrap_or_else(|| "warpNone".into());
@@ -979,12 +1027,13 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
         "AntiAlias",
         E::Int(match layer.antialias {
             AntiAlias::None => 0,
-            AntiAlias::Sharp => 1,
-            AntiAlias::Crisp => 2,
-            AntiAlias::Strong => 3,
-            AntiAlias::Smooth => 4,
-            // EngineData has no platform modes; the `AntA` descriptor carries the exact value.
-            AntiAlias::Windows | AntiAlias::WindowsLcd => 1,
+            AntiAlias::Crisp => 1,
+            AntiAlias::Strong => 2,
+            AntiAlias::Smooth => 3,
+            AntiAlias::Sharp => 4,
+            // No Photoshop file confirms the platform modes' numbers here; the `AntA` descriptor
+            // carries the exact mode, and Smooth is the closest.
+            AntiAlias::Windows | AntiAlias::WindowsLcd => 3,
         }),
     );
     if dict.get("UseFractionalGlyphWidths").is_none() {
@@ -1059,6 +1108,19 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
     e
 }
 
+/// The anti-aliasing mode for EngineData's `AntiAlias` number, as Photoshop writes it: 0 None,
+/// 1 Crisp, 2 Strong, 3 Smooth, 4 Sharp. Other numbers (platform modes) are left to `AntA`.
+fn engine_antialias(n: f64) -> Option<AntiAlias> {
+    Some(match n as i64 {
+        0 => AntiAlias::None,
+        1 => AntiAlias::Crisp,
+        2 => AntiAlias::Strong,
+        3 => AntiAlias::Smooth,
+        4 => AntiAlias::Sharp,
+        _ => return None,
+    })
+}
+
 /// Builds the `TySh` block for `layer`, patching its current `psd_raw` when present.
 /// `ink` is the layer's rendered bounds in text space (for `bounds`/`boundingBox`).
 pub fn build_tysh(layer: &TextLayer, dpi: f32, ink: Option<[f32; 4]>) -> Vec<u8> {
@@ -1123,6 +1185,8 @@ pub fn build_tysh(layer: &TextLayer, dpi: f32, ink: Option<[f32; 4]>) -> Vec<u8>
         (None, Some(old)) if enum_value(&old, "warpStyle").as_deref() == Some("warpNone") => Some(old),
         _ => None,
     };
-    let bounds = [l.floor() as i32, t.floor() as i32, r.ceil() as i32, b.ceil() as i32];
+    // Photoshop's trailing bounds: zeros for unwarped type, the text-space bounds when warped.
+    let warped = warp.as_ref().is_some_and(|w| enum_value(w, "warpStyle").is_some_and(|s| s != "warpNone"));
+    let bounds = if warped { [l, t, r, b] } else { [0.0; 4] };
     write_tysh(&TySh { transform: layer.transform, text, warp, bounds })
 }
