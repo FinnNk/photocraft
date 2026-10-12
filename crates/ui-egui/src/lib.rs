@@ -27,6 +27,7 @@ pub mod artboard_ui;
 mod blend_keys;
 pub(crate) mod blend_preview;
 mod brand;
+pub(crate) mod brush_cursor;
 pub mod brush_panel;
 pub mod brush_picker;
 pub mod brush_preview;
@@ -68,6 +69,7 @@ pub mod discard_ui;
 pub mod distort_ui;
 pub mod doc_props_ui;
 pub mod dock;
+pub mod duplicate_layer_ui;
 pub mod enable_rules;
 pub mod eraser_ui;
 pub mod export_dialog;
@@ -97,6 +99,7 @@ pub mod kys_import;
 pub mod lasso_ui;
 pub mod layer_menu_ui;
 pub mod layer_pick_ui;
+pub mod layer_picker;
 pub mod layer_props_ui;
 mod layer_reveal;
 pub mod layer_row_ui;
@@ -198,6 +201,7 @@ mod type_transform;
 mod variables_ui;
 pub mod vector_ui;
 pub mod view_cmds;
+pub mod vp_ui;
 pub mod warp_preview;
 pub mod wheel_nav;
 pub mod wide_angle_ui;
@@ -2454,6 +2458,35 @@ mod clipboard_tests {
         }
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0, "the OS clipboard is read only on an explicit paste");
         assert!(h.state().session.clipboard.is_none());
+    }
+
+    /// #2928: with the layer mask targeted, ⌘C copies the mask's values as grayscale, not the
+    /// layer's pixels — so ⌘V (targeting another layer's mask, #1035) moves the mask itself.
+    #[test]
+    fn copy_with_the_mask_targeted_copies_the_mask_not_the_pixels() {
+        let (os, reads) = (OsClip::default(), Arc::default());
+        let mut app = app_with_os_clipboard(&os, &reads);
+        app.run("layer.new.layer", serde_json::json!({})).unwrap();
+        app.run("layer.layerMask.hideAll", serde_json::json!({})).unwrap();
+        // Black pixels, a white square in the mask: the copy must carry the mask.
+        app.run("select.all", serde_json::json!({})).unwrap();
+        app.run("edit.fill", serde_json::json!({"color": "#000000"})).unwrap();
+        app.run("select.rect", serde_json::json!({"x": 4, "y": 4, "width": 8, "height": 8})).unwrap();
+        app.run("edit.fill", serde_json::json!({"color": "#ffffff", "target": "mask"})).unwrap();
+        app.run("select.deselect", serde_json::json!({})).unwrap();
+        app.ui.mask_target = true;
+        crate::menus::invoke(&mut app, &egui::Context::default(), "edit.copy", serde_json::json!({})).unwrap();
+        let clip = app.session.clipboard.clone().expect("the mask was copied");
+        let st = app.session.active().unwrap();
+        let (w, h) = (st.doc.size.width as i32, st.doc.size.height as i32);
+        assert_eq!(
+            [clip.bounds.x0, clip.bounds.y0, clip.bounds.width() as i32, clip.bounds.height() as i32],
+            [0, 0, w, h],
+            "the mask, whole — not the black pixels"
+        );
+        let px = clip.surface.rgba(6, 6);
+        assert!(px[0] > 0.99 && px[3] > 0.99, "white mask values: {px:?}");
+        assert!(clip.surface.rgba(20, 20)[0] < 0.01, "the hidden area copies as black");
     }
 
     /// #1035: with the layer mask targeted (its thumbnail clicked), ⌘V pastes the clipboard's

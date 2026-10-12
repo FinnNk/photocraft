@@ -114,6 +114,7 @@ pub mod type_mask_cmds;
 pub mod type_spell_cmds;
 pub mod type_styles_cmds;
 mod variables_cmds;
+pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
 pub mod vector_cmds;
 mod video_cmds;
 pub use video_cmds::render_video_with;
@@ -575,6 +576,26 @@ impl Session {
     fn names_existing_layer(&self, id: &str, params: &Value) -> bool {
         matches!(id, "layer.hideLayers" | "layer.showLayers" | "layer.renameLayer")
             && params.get("layer").and_then(Value::as_u64).is_some_and(|l| self.active().is_some_and(|st| st.doc.layer(LayerId(l)).is_some()))
+    }
+
+    /// The precondition of a command whose params document `"layer":id` (it acts on that layer),
+    /// when `params` name an existing layer of the active document: checked on that layer rather
+    /// than on the active one, which stays active (#466). A script, action or agent can then
+    /// Replace Contents, Rasterize or Merge Down a layer without selecting it first. `None` for
+    /// other commands, or without such a layer.
+    pub(crate) fn explicit_layer_enabled(&mut self, spec: &commands::CommandSpec, params: &Value) -> Option<std::result::Result<(), String>> {
+        if !spec.params.contains("\"layer\":id") {
+            return None;
+        }
+        let target = LayerId(params.get("layer")?.as_u64()?);
+        let d = self.active_mut()?;
+        d.doc.layer(target)?;
+        let active = d.active_layer.replace(target);
+        let r = (spec.enabled)(self);
+        if let Some(d) = self.active_mut() {
+            d.active_layer = active;
+        }
+        Some(r)
     }
 
     /// Apply an undoable edit to the active document.

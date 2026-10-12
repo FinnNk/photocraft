@@ -1962,6 +1962,7 @@
 	Show only crosshair while painting	描画中は十字線のみ表示
 	Show slice numbers	スライス番号を表示
 	Show tooltips	ツールチップを表示
+	Enable animations	アニメーションを有効にする
 	Show highlight on rollover	ロールオーバー時にハイライトを表示
 	Show bounding box when dragging layer	レイヤーのドラッグ中にバウンディングボックスを表示
 	System title bar	システムのタイトルバー
@@ -3592,6 +3593,16 @@ cameraData	Lens	レンズ
 	Amount:	量:
 	Protect:	保護:
 	Protect skin tones	肌色を保護
+	Edit points to modify the curve	ポイントを編集してカーブを変更
+	Draw to modify the curve	描画してカーブを変更
+curves	Smooth	スムーズ
+	Smooth the curve values	カーブの値を滑らかにする
+	Drag to draw the curve · {key}-click draws a straight line	ドラッグしてカーブを描画 · {key}+クリックで直線を描画
+	Grid Size:	グリッドサイズ:
+	Vanishing Point: click four corners to create a plane	消点：4 つの角をクリックして面を作成します
+	Vanishing Point is not active	消点はアクティブではありません
+	Apply Vanishing Point ({key})	消点を適用({key})
+	Fix the red plane first: its corners must form a convex quad	先に赤い面を修正してください：角が凸四角形になる必要があります
 # Select and Mask view modes (#1754)
 	Onion Skin	オニオンスキン
 	Marching Ants	点線の境界
@@ -3625,6 +3636,21 @@ cameraData	Lens	レンズ
 	Apply mask to layer before removing?	削除する前にマスクをレイヤーに適用しますか？
 	The layer or its mask changed. Drag the mask onto the Trash again.	レイヤーまたはそのマスクが変更されました。もう一度マスクをゴミ箱にドラッグしてください。
 	Delete the vector mask?	ベクトルマスクを削除しますか？
+# Counted status messages and labels (#3454; adapted from PR #3821)
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	スウォッチ {n} 個を {file} に書き出しました
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{group} からブラシ {n} 個を読み込みました
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{file} からスウォッチ {n} 個を読み込みました
+@plural	Played {n} step|Played {n} steps	{n} ステップを再生しました
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	ディスク上で変更されたリンクされたスマートオブジェクト {n} 個を更新しました
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	Web 用に保存: {n} ファイル
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	このカンプに記録されたレイヤー {n} 個が削除されました。カンプを更新するか、警告を消去してください。
+@plural	{n} plane|{n} planes	{n} 個の平面
+@plural	{n} preset|{n} presets	{n} 個のプリセット
+@plural	{n} sample point removed|{n} sample points removed	サンプルポイント {n} 個を削除しました
+@plural	{n} slice|{n} slices	{n} 個のスライス
+@plural	{n} step|{n} steps	{n} ステップ
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning}(ほかにブラシプリセットの警告 {n} 件)
+@plural	{what} with {n} warning|{what} with {n} warnings	{what}(警告 {n} 件)
 # View › Guides › New Guide… › Color
 	Light Blue	ライトブルー
 	Light Red	ライトレッド

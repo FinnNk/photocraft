@@ -1928,6 +1928,7 @@
 	Show only crosshair while painting	Tampilkan crosshair saja saat melukis
 	Show slice numbers	Tampilkan nomor slice
 	Show tooltips	Tampilkan tooltip
+	Enable animations	Aktifkan animasi
 	Show highlight on rollover	Tampilkan sorotan saat kursor melintas
 	Show transformation values	Tampilkan nilai transformasi
 	Slice color	Warna slice
@@ -2985,6 +2986,16 @@ cameraData	Lens	Lensa
 	Amount:	Jumlah:
 	Protect:	Lindungi:
 	Protect skin tones	Lindungi warna kulit
+	Edit points to modify the curve	Edit titik untuk mengubah kurva
+	Draw to modify the curve	Gambar untuk mengubah kurva
+curves	Smooth	Haluskan
+	Smooth the curve values	Haluskan nilai kurva
+	Drag to draw the curve · {key}-click draws a straight line	Seret untuk menggambar kurva · {key}-klik menggambar garis lurus
+	Grid Size:	Ukuran Grid:
+	Vanishing Point: click four corners to create a plane	Vanishing Point: klik empat sudut untuk membuat bidang
+	Vanishing Point is not active	Vanishing Point tidak aktif
+	Apply Vanishing Point ({key})	Terapkan Vanishing Point ({key})
+	Fix the red plane first: its corners must form a convex quad	Perbaiki bidang merah dulu: sudut-sudutnya harus membentuk segi empat cembung
 # Select and Mask view modes (#1754)
 	Onion Skin	Kulit Bawang
 	Marching Ants	Semut Berbaris

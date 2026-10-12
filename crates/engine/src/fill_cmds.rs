@@ -291,7 +291,7 @@ fn blend_into(surf: &mut Surface, area: Rect, source: &Source, sel: Option<&Surf
     let done = std::sync::Mutex::new(done);
     tiles.into_par_iter().try_for_each(|(tc, tile)| -> Result<()> {
         let tr = tc.rect().intersect(&area);
-        let mask = sel.map(|m| Mask { bytes: m.tile(tc).map_or(m.default_bytes(), |t| t.bytes()), fmt: m.format(), origin: tc.rect() });
+        let mask = sel.map(|m| Mask::of(m, tc));
         if let Some(s) = &solid
             && tr == tc.rect()
             && mask.as_ref().is_none_or(|m| m.full(tr))
@@ -315,21 +315,25 @@ fn blend_into(surf: &mut Surface, area: Rect, source: &Source, sel: Option<&Surf
 }
 
 /// The selection's coverage over one tile (its channel 0).
-struct Mask<'a> {
+pub(crate) struct Mask<'a> {
     bytes: &'a [u8],
     fmt: photocraft_color::PixelFormat,
     origin: Rect,
 }
 
-impl Mask<'_> {
-    fn at(&self, x: i32, y: i32) -> f32 {
+impl<'a> Mask<'a> {
+    /// `sel` over the tile at `tc` (its default pixel where it has no tile there).
+    pub(crate) fn of(sel: &'a Surface, tc: photocraft_geom::TileCoord) -> Self {
+        Mask { bytes: sel.tile(tc).map_or(sel.default_bytes(), |t| t.bytes()), fmt: sel.format(), origin: tc.rect() }
+    }
+    pub(crate) fn at(&self, x: i32, y: i32) -> f32 {
         let bpp = self.fmt.bytes_per_pixel();
         // A default-pixel mask is one pixel long: every position reads it.
         let i = if self.bytes.len() == bpp { 0 } else { ((y - self.origin.y0) as usize * TILE_SIZE as usize + (x - self.origin.x0) as usize) * bpp };
         self.bytes.get(i..i + bpp).map_or(0.0, |px| photocraft_color::read_sample(px, self.fmt.sample, 0))
     }
     /// Fully selected over `r`?
-    fn full(&self, r: Rect) -> bool {
+    pub(crate) fn full(&self, r: Rect) -> bool {
         (r.y0..r.y1).all(|y| (r.x0..r.x1).all(|x| self.at(x, y) >= 1.0))
     }
 }

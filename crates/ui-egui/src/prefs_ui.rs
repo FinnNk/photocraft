@@ -383,6 +383,21 @@ fn sync_tooltips(app: &PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Interface › Enable Animations: off, egui's fades and slides take no time and scroll areas jump
+/// straight to their target (#3273). Re-checked every frame because a theme change rebuilds the
+/// style; both the dark and light styles are set, so a system appearance switch keeps it.
+fn sync_animations(app: &PhotocraftApp, ctx: &egui::Context) {
+    let on = app.session.prefs().interface.enable_animations;
+    let time = if on { egui::Style::default().animation_time } else { 0.0 };
+    if ctx.global_style().animation_time != time {
+        let scroll = if on { egui::style::ScrollAnimation::default() } else { egui::style::ScrollAnimation::none() };
+        ctx.all_styles_mut(|s| {
+            s.animation_time = time;
+            s.scroll_animation = scroll;
+        });
+    }
+}
+
 /// Resolve the saved appearance mode without changing it or either theme slot.
 pub(crate) fn sync_appearance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A restored or embedding-supplied pin must not suppress native appearance events.
@@ -406,6 +421,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     crate::theme::set_ui_font_size(ctx, app.session.prefs().interface.ui_font_size);
     presets_store(app);
     sync_tooltips(app, ctx);
+    sync_animations(app, ctx);
     app.sync_recent();
     if let Some(wait) = persist(app, ctx.input(|i| i.time)) {
         ctx.request_repaint_after(std::time::Duration::try_from_secs_f64(wait).unwrap_or_default());
@@ -2647,6 +2663,31 @@ mod tests {
             tick(&mut app, &ctx);
             assert_eq!(ctx.global_style().interaction.tooltip_delay, crate::theme::TOOLTIP_DELAY);
         }
+    }
+
+    #[test]
+    fn enable_animations_off_stops_fades_and_scroll_glides_and_is_remembered() {
+        let on = egui::Style::default().animation_time;
+        let both = |ctx: &egui::Context| [egui::Theme::Dark, egui::Theme::Light].map(|t| ctx.style_of(t).animation_time);
+        // Saved off: the first frame after a restart applies it to both appearance styles.
+        let (mut app, _) = app_with_saved(Some(json!({"interface": {"enableAnimations": false}}).to_string()));
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        assert_eq!(both(&ctx), [0.0, 0.0]);
+        assert_eq!(ctx.global_style().scroll_animation.duration.max, 0.0);
+        // A theme change rebuilds the style; the next frame turns animations off again.
+        app.apply_theme(&ctx, crate::theme::ThemeKind::StudioLight);
+        tick(&mut app, &ctx);
+        assert_eq!(both(&ctx), [0.0, 0.0]);
+        app.run("prefs.set", json!({"values": {"interface.enableAnimations": true}})).unwrap();
+        tick(&mut app, &ctx);
+        assert_eq!(both(&ctx), [on, on]);
+        assert!(on > 0.0 && ctx.global_style().scroll_animation.duration.max > 0.0);
+        // A hand-edited value of the wrong type doesn't crash: the defaults (animations on) stay.
+        let (mut bad, _) = app_with_saved(Some(json!({"interface": {"enableAnimations": "nope"}}).to_string()));
+        let ctx2 = egui::Context::default();
+        tick(&mut bad, &ctx2);
+        assert_eq!(both(&ctx2), [on, on]);
     }
 
     #[test]
