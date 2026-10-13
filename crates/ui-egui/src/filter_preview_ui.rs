@@ -30,7 +30,7 @@ const CENTER_Y_FIELD: &str = "__pvCy";
 /// Draw the filter dialog's in-dialog preview window below its parameters (its `fields` `f`). A
 /// no-op for dialogs without a preview and for Select and Mask, which has its own view.
 pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    if !f.contains_key("__preview") || crate::select_mask_view::owns(f) {
+    if !shows(f) {
         return;
     }
     let Some(cmd) = f.get("__command").and_then(Value::as_str).map(str::to_owned) else { return };
@@ -54,6 +54,12 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     let t = Tokens::get(ui.ctx());
     let cache_id = egui::Id::new(("filter-preview-ui", dialog));
     let mut cache: Cache = ui.ctx().data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<Cache>(cache_id)));
+    // Channel visibility and the active mask can change without a document revision. Both the
+    // original (press-and-hold) and filtered textures must follow the canvas's current view.
+    let view = (st.channel_view.clone(), app.session.prefs().interface.show_channels_in_color, st.active_layer);
+    if cache.view.as_ref() != Some(&view) {
+        cache = Cache { view: Some(view), ..Default::default() };
+    }
 
     // Unfiltered proxy: built once per document revision and factor (cheap at the proxy factor).
     let orig_key = TexKey::Original(doc_id, revision, base_k);
@@ -145,7 +151,14 @@ const ZOOM_STEPS: [f32; 7] = [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
 /// The vertical space the preview window takes below the parameters: the image, the zoom row and
 /// their spacing. `0` when the dialog has no preview (so the caller reserves nothing).
 pub(crate) fn reserved_height(f: &Map<String, Value>) -> f32 {
-    if f.contains_key("__preview") && !crate::select_mask_view::owns(f) { PREVIEW_H + 32.0 } else { 0.0 }
+    if shows(f) { PREVIEW_H + 32.0 } else { 0.0 }
+}
+
+/// Whether the dialog with fields `f` gets the preview window: Filter menu dialogs with a Preview
+/// checkbox, as in Photoshop. Image › Rotation › Arbitrary and the adjustment dialogs keep only
+/// the on-canvas preview, and Select and Mask has its own view.
+fn shows(f: &Map<String, Value>) -> bool {
+    f.contains_key("__preview") && !crate::select_mask_view::owns(f) && f.get("__command").and_then(Value::as_str).is_some_and(|c| c.starts_with("filter."))
 }
 
 /// The next zoom level up or down from `zoom`, clamped to [`ZOOM_STEPS`]' ends.
@@ -194,10 +207,27 @@ fn document_size(proxy: [u32; 2], k: u32) -> Vec2 {
 
 /// A composite as monitor pixels, matching the canvas (`canvas::display_image`).
 fn upload(ctx: &egui::Context, app: &PhotocraftApp, name: &str, doc: &Document) -> egui::TextureHandle {
-    let buf = photocraft_compose::flatten(doc);
+    // Reduce only the display texture when a full-resolution result exceeds the device limit.
+    // The cached document and the window's document-pixel zoom coordinates stay at full size.
+    let factor = texture_factor(doc.size.width, doc.size.height, ctx.input(|i| i.max_texture_side));
+    let (width, height) = (doc.size.width.div_ceil(factor), doc.size.height.div_ceil(factor));
+    if let Some(st) = app.session.active()
+        && let Some(pixels) =
+            crate::channel_view::render(doc, &st.channel_view, doc.bounds(), factor, app.session.prefs().interface.show_channels_in_color, st.active_layer)
+    {
+        let image = egui::ColorImage::new([width as usize, height as usize], pixels);
+        return ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
+    }
+    let buf = if factor == 1 { photocraft_compose::flatten(doc) } else { photocraft_compose::render_reduced(doc, width, height) };
     let (display, _) = crate::canvas::canvas_display(app, doc, None);
     let img = crate::canvas::display_image(display.as_deref(), &buf);
     ctx.load_texture(name, img, egui::TextureOptions::LINEAR)
+}
+
+/// The reduction that fits a `w`×`h` image inside a `max_side` texture (1: it already fits).
+fn texture_factor(w: u32, h: u32, max_side: usize) -> u32 {
+    let max_side = u32::try_from(max_side).unwrap_or(u32::MAX).max(1);
+    w.max(h).div_ceil(max_side).max(1)
 }
 
 /// What a cached texture was built from, so it is rebuilt only when its source changes.
@@ -220,11 +250,110 @@ struct CachedTex {
 struct Cache {
     filtered: Option<CachedTex>,
     original: Option<CachedTex>,
+    view: Option<(photocraft_engine::channel_cmds::ChannelView, bool, Option<photocraft_doc::LayerId>)>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_resolution_preview_textures_respect_the_device_limit() {
+        let ctx = egui::Context::default();
+        let limit = ctx.input(|i| i.max_texture_side) as u32;
+        let width = limit + 2;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": width, "height": 2})).unwrap();
+        for alpha in [false, true] {
+            if alpha {
+                app.run("channel.new", json!({"name": "Alpha", "fill": "black"})).unwrap();
+                app.session
+                    .edit("Fixture", |doc, _| {
+                        doc.channels[0].surface.fill_rect(photocraft_geom::Rect::new(0, 0, (width / 2) as i32, 2), &[1.0]);
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            let doc = &app.session.active().unwrap().doc;
+            let texture = upload(&ctx, &app, "full-resolution-preview", doc);
+            let mut delta = ctx.tex_manager().write().take_delta();
+            let egui::ImageData::Color(image) = &delta.set.get(&texture.id()).unwrap()[0].image;
+            let pixels = image.pixels.clone();
+            delta.clear();
+            assert_eq!(texture.size(), [width.div_ceil(2) as usize, 1]);
+            assert!(texture.size().into_iter().all(|side| side <= limit as usize));
+            assert_eq!(doc.size.width, width, "display reduction must not resize the filter result");
+            assert_eq!(pixels[0], Color32::WHITE);
+            assert_eq!(*pixels.last().unwrap(), if alpha { Color32::BLACK } else { Color32::WHITE });
+        }
+    }
+
+    #[test]
+    fn uploaded_preview_shows_the_filtered_alpha_at_every_depth_and_proxy_scale() {
+        use photocraft_engine::channel_cmds::ChannelTarget;
+        for depth in [8, 16, 32] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 16, "height": 16, "depth": depth})).unwrap();
+            app.run("channel.new", json!({"name": "Alpha", "fill": "black"})).unwrap();
+            app.session
+                .edit("Fixture", |doc, _| {
+                    doc.channels[0].surface.fill_rect(photocraft_geom::Rect::new(0, 0, 8, 16), &[1.0]);
+                    Ok(())
+                })
+                .unwrap();
+            let st = app.session.active().unwrap();
+            for k in [1, 2, 4] {
+                let preview = crate::filter_dialog::preview_document_for_target(
+                    &st.doc,
+                    st.active_layer,
+                    "filter.blur.gaussianBlur",
+                    &json!({"radius": 2.0}),
+                    k,
+                    None,
+                    ChannelTarget::Alpha(0),
+                )
+                .unwrap();
+                let ctx = egui::Context::default();
+                let texture = upload(&ctx, &app, "alpha-preview", &preview);
+                let mut delta = ctx.tex_manager().write().take_delta();
+                let egui::ImageData::Color(image) = &delta.set.get(&texture.id()).unwrap()[0].image;
+                let pixels = image.pixels.clone();
+                delta.clear();
+                let expected = crate::channel_view::render(&preview, &st.channel_view, preview.bounds(), 1, false, st.active_layer).unwrap();
+                assert_eq!(pixels, expected, "depth {depth}, factor {k}");
+                assert_ne!(pixels[0], pixels[pixels.len() - 1], "the alpha edge is visible, not the white RGB layer");
+                assert!(pixels.iter().any(|p| p.r() > 0 && p.r() < 255), "the blurred edge is visible");
+            }
+        }
+    }
+
+    #[test]
+    fn original_texture_refreshes_when_the_channel_view_changes_without_an_edit() {
+        use photocraft_engine::channel_cmds::ChannelTarget;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        app.run("channel.new", json!({"name": "White", "fill": "white"})).unwrap();
+        app.run("channel.new", json!({"name": "Black", "fill": "black"})).unwrap();
+        app.session.active_mut().unwrap().channel_view.target = ChannelTarget::Alpha(0);
+        let revision = app.session.active().unwrap().revision;
+        let id = crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
+        let mut fields = app.ui.dialogs.last().unwrap().fields.clone();
+        let ctx = egui::Context::default();
+        let cache_id = egui::Id::new(("filter-preview-ui", id));
+        ctx.run_ui(Default::default(), |ui| window(&app, id, ui, &mut fields)).textures_delta.clear();
+        let before = ctx.data(|d| d.get_temp::<Cache>(cache_id).unwrap().original.unwrap().tex.id());
+        app.session.active_mut().unwrap().channel_view.target = ChannelTarget::Alpha(1);
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        let mut output = ctx.run_ui(Default::default(), |ui| window(&app, id, ui, &mut fields));
+        let after = ctx.data(|d| d.get_temp::<Cache>(cache_id).unwrap().original.unwrap().tex.id());
+        let pixels = output.textures_delta.set.get(&after).map(|delta| {
+            let egui::ImageData::Color(image) = &delta[0].image;
+            image.pixels.clone()
+        });
+        output.textures_delta.clear();
+        assert_ne!(before, after, "press-and-hold must not reuse the old channel");
+        assert!(pixels.unwrap().iter().all(|p| *p == Color32::BLACK));
+    }
 
     #[test]
     fn zoom_steps_walk_the_levels_and_stay_in_bounds() {
@@ -236,6 +365,30 @@ mod tests {
         assert_eq!(step_zoom(MIN_ZOOM, false), MIN_ZOOM, "clamped at the bottom");
         assert_eq!(step_zoom(0.0, true), MIN_ZOOM, "a corrupt zoom recovers upward");
         assert_eq!(step_zoom(f32::NAN, false), MIN_ZOOM);
+    }
+
+    #[test]
+    fn only_filter_dialogs_get_the_preview_window() {
+        let fields = |cmd: &str| json!({"__preview": true, "__command": cmd}).as_object().cloned().unwrap();
+        assert!(shows(&fields("filter.blur.gaussianBlur")));
+        assert!(reserved_height(&fields("filter.blur.gaussianBlur")) > 0.0);
+        // Photoshop's Rotate Canvas and adjustment dialogs have no preview window.
+        assert!(!shows(&fields("image.rotation.arbitrary")));
+        assert_eq!(reserved_height(&fields("image.rotation.arbitrary")), 0.0);
+        assert!(!shows(&fields("adjust.levels")));
+        // No Preview checkbox or no command: no window.
+        assert!(!shows(json!({"__command": "filter.blur.gaussianBlur"}).as_object().unwrap()));
+        assert!(!shows(json!({"__preview": true}).as_object().unwrap()));
+    }
+
+    #[test]
+    fn textures_are_reduced_to_fit_the_gpu() {
+        assert_eq!(texture_factor(3000, 2000, 2048), 2);
+        assert_eq!(texture_factor(2048, 100, 2048), 1);
+        assert_eq!(texture_factor(9000, 9000, 2048), 5);
+        // A zero or absurd limit never divides by zero.
+        assert_eq!(texture_factor(3000, 2000, 0), 3000);
+        assert_eq!(texture_factor(0, 0, 2048), 1);
     }
 
     #[test]

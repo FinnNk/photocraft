@@ -96,9 +96,13 @@ pub struct ViewOptions {
     pub middle_eastern_composer: bool,
     /// Parameters from the last successfully applied New Guide Layout dialog.
     pub guide_layout: Value,
+    /// Developer overlay of the active layer's storage tiles (tile_overlay.rs), set with the
+    /// control channel's `ui.set {"tileGrid": true}`.
+    pub tile_grid: bool,
 }
 
-fn default_guide_layout() -> Value {
+/// Factory New Guide Layout values (Alt+Reset and a fresh ViewOptions).
+pub(crate) fn default_guide_layout() -> Value {
     json!({"columns": 8, "gutter": 20, "rows": 0, "rowGutter": 0, "margin": 0, "centerColumns": false, "clearExisting": false})
 }
 
@@ -120,6 +124,7 @@ impl Default for ViewOptions {
             language_features: "defaultFeatures".into(),
             middle_eastern_composer: false,
             guide_layout: default_guide_layout(),
+            tile_grid: false,
         }
     }
 }
@@ -165,6 +170,41 @@ const LAYOUTS: [&str; 10] = [
     "sixUp",
     "tile",
 ];
+
+/// Whether the window was maximized when a screen mode took it full screen (egui temp data).
+fn was_maximized_id() -> egui::Id {
+    egui::Id::new("pc-full-screen-was-maximized")
+}
+
+/// The window commands for switching to screen mode `next`, and whether the window should be
+/// maximized again when it leaves full screen. With `keep_apart` (Windows), full screen and
+/// maximized never overlap: a maximized window is un-maximized before it goes full screen and
+/// maximized again after it leaves. Why: winit on Windows keeps the maximized style on a window
+/// that goes full screen from maximized, and the shell then draws the taskbar black instead of
+/// hiding it; on the way out the window stays maximized at the monitor's full size, over the
+/// taskbar (#3550, #4018, #4230). [OBSERVED 2026-10-12, Windows 11, eframe 0.36.2, winit 0.30.13,
+/// a minimal eframe window; un-maximizing first gave a clean full screen and a work-area maximize.]
+///
+/// WORKAROUND(winit#4756): remove `keep_apart` once the winit in Cargo.lock (0.30.13 today) has
+/// the fix; check first with https://gist.github.com/aweussom/3f80ffb82df7f0102341858afbbffd9b
+/// (`--max`, no `--fix`: full screen must have no WS_MAXIMIZE and hide the taskbar).
+fn screen_mode_commands(keep_apart: bool, full_screen: bool, maximized: bool, was_maximized: bool, next: &str) -> (Vec<egui::ViewportCommand>, bool) {
+    let want = next != "standard";
+    let mut commands = Vec::new();
+    let mut remember = was_maximized;
+    if keep_apart && want && !full_screen && maximized {
+        commands.push(egui::ViewportCommand::Maximized(false));
+        remember = true;
+    }
+    commands.push(egui::ViewportCommand::Fullscreen(want));
+    if !want {
+        if keep_apart && full_screen && remember {
+            commands.push(egui::ViewportCommand::Maximized(true));
+        }
+        remember = false;
+    }
+    (commands, remember)
+}
 
 /// Pixel aspect ratio (width / height of a pixel) of a preset id.
 pub fn pixel_aspect_ratio(id: &str) -> f32 {
@@ -657,7 +697,13 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
         };
         o.screen_mode = next.to_string();
         // Both full-screen modes take the whole display; the menu bar stays in the first.
-        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(next != "standard"));
+        let (full_screen, maximized) = ctx.input(|i| (i.viewport().fullscreen.unwrap_or(false), i.viewport().maximized.unwrap_or(false)));
+        let was_maximized = ctx.data(|d| d.get_temp::<bool>(was_maximized_id())).unwrap_or(false);
+        let (commands, was_maximized) = screen_mode_commands(cfg!(target_os = "windows"), full_screen, maximized, was_maximized, next);
+        ctx.data_mut(|d| d.insert_temp(was_maximized_id(), was_maximized));
+        for command in commands {
+            ctx.send_viewport_cmd(command);
+        }
         return Ok(json!({"screenMode": next}));
     }
     if let Some(k) = id.strip_prefix("view.pixelAspectRatio.") {
@@ -933,7 +979,20 @@ fn form(app: &mut PhotocraftApp, command: &str, label: &str, fields: Value, choi
     if let Value::Object(m) = fields {
         f.extend(m);
     }
+    // Snapshot user-facing params at open so Alt+Reset can restore them.
+    let orig: Map<String, Value> = f.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    f.insert("__formOrig".into(), Value::Object(orig));
     app.ui.open_dialog(DialogKind::Command, f)
+}
+
+/// Alt+Cancel (Reset): restore the `__form` params captured at open.
+pub fn reset_form(f: &mut Map<String, Value>) {
+    if !f.contains_key("__form") {
+        return;
+    }
+    let Some(Value::Object(orig)) = f.get("__formOrig").cloned() else { return };
+    f.retain(|k, _| k.starts_with("__"));
+    f.extend(orig);
 }
 
 fn label_of(key: &str) -> String {
@@ -968,6 +1027,25 @@ mod label_tests {
             assert_eq!(label_of("useAntialias"), "Use antialias");
             assert_eq!(label_of("radius"), "Radius");
         });
+    }
+}
+
+#[cfg(test)]
+mod form_reset_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn alt_reset_restores_form_orig() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let id = form(&mut app, "test.form", "Test", json!({"radius": 5.0, "on": true}), json!({}));
+        let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+        f.insert("radius".into(), json!(99.0));
+        f.insert("on".into(), json!(false));
+        reset_form(f);
+        assert_eq!(f["radius"], json!(5.0));
+        assert_eq!(f["on"], json!(true));
+        assert!(f.contains_key("__formOrig"));
     }
 }
 

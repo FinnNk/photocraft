@@ -21,8 +21,8 @@ mod recovery_tests;
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "ora", "kra", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm",
-    "pgm", "ppm", "pam", "pfm", "pcx", "fits", "fit", "fts", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf",
-    "abr", "grd", "svg", "svgz", "aco", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "pgm", "ppm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef",
+    "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -60,8 +60,13 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("WebP", &["webp"]),
     ("TIFF", &["tif"]),
     ("Targa", &["tga"]),
+    // Also in Photoshop's Save As list; ICO is PhotoCraft's own (#4357): up to 256×256, with alpha.
+    ("BMP", &["bmp"]),
+    ("GIF", &["gif"]),
+    ("ICO", &["ico"]),
     ("OpenEXR", &["exr"]),
     ("FITS", &["fits", "fit"]),
+    ("DPX", &["dpx"]),
 ];
 
 /// Non-document files the shell saves (Swatches panel exports): offered alone, so the dialog
@@ -217,6 +222,7 @@ fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_i
     opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
     opts.tga_bits = settings.tga_bits;
     opts.image_previews = settings.image_previews;
+    opts.psd_maximize_compatibility = settings.psd_maximize_compatibility;
     opts
 }
 
@@ -666,6 +672,33 @@ mod tests {
             assert!(save_filters(name)[0].1.iter().any(|e| e == ext), "{name}: {:?}", save_filters(name)[0]);
         }
         assert_eq!(save_filters("Untitled")[0].0, "PSD Document", "no extension keeps the default");
+    }
+
+    /// Every flat format Save As offers is one PhotoCraft writes, and ICO is among them (#4357).
+    #[test]
+    fn save_as_offers_only_writable_formats_including_ico() {
+        let layered = ["psd", "psb", "pcraft", "ora"];
+        for (name, exts) in SAVE_FILTERS {
+            for ext in exts.iter().filter(|e| !layered.contains(e)) {
+                let format = photocraft_codecs::from_extension(ext).unwrap_or_else(|| panic!("{name}: .{ext} is no known format"));
+                assert!(format.caps().write, "{name}: .{ext} can't be written");
+            }
+        }
+        for ext in ["ico", "gif", "bmp"] {
+            assert!(save_filters("Untitled-1.psd").iter().any(|(_, exts)| exts.iter().any(|e| e == ext)), ".{ext} is offered");
+        }
+        assert_eq!(save_filters("icon.ico")[0].0, "ICO", "an .ico name leads with its own type");
+        // What Save As writes there: an icon up to 256×256, and a clear error past that.
+        let doc = |side: u32| {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": side, "height": side})).unwrap();
+            s.active().unwrap().doc.clone()
+        };
+        let opts = export_options(&photocraft_ui_egui::ExportSettings::default());
+        let icon = photocraft_io::export(&doc(256), "icon.ico", &opts).unwrap();
+        assert_eq!(icon.bytes[..4], [0, 0, 1, 0], "an ICO header");
+        let err = photocraft_io::export(&doc(300), "icon.ico", &opts).map(|_| ()).unwrap_err().to_string();
+        assert!(err.contains("256"), "{err}");
     }
 
     #[test]

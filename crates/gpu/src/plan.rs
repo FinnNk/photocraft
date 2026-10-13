@@ -9,7 +9,8 @@
 //! effect maps (shadow / glow / satin / bevel coverage, stroke bands) are built once per layer
 //! state by [`crate::fx`] and sampled here; exterior effects paint into a copy of the backdrop,
 //! the layer at fill opacity takes the interior effects, and the two merge with the layer's mode
-//! and opacity. Effect passes are clipped to the layer's effect region and the result is copied
+//! (or the layer merges first and the effects paint over it: `effects::premerges_layer`) and
+//! opacity. Effect passes are clipped to the layer's effect region and the result is copied
 //! back into the backdrop in place, so a small text layer costs only its own pixels.
 
 use photocraft_color::BlendMode;
@@ -803,7 +804,7 @@ impl<'a> Planner<'a> {
                 // compose::render_fill: the pattern tiled from the layer's frame (transparent
                 // when missing), then the layer's masks.
                 let empty = self.clear();
-                let Some(pat) = photocraft_doc::pattern::find(self.cx.patterns, id, name).filter(|p| !p.is_empty()) else { return Ok(empty) };
+                let Some(pat) = photocraft_doc::pattern::find(self.cx.patterns, id, name).filter(|p| p.is_paintable()) else { return Ok(empty) };
                 let frame = photocraft_compose::fill_frame(layer, self.cx.canvas);
                 let anchor = if frame.is_empty() { (0.0, 0.0) } else { (f64::from(frame.x0), f64::from(frame.y0)) };
                 let paint = Paint::Pattern(pat, placement(anchor, *link, *phase, *scale, *angle));
@@ -1095,9 +1096,22 @@ impl<'a> Planner<'a> {
         } else {
             init(self, lay_src, None, INIT_INSIDE, layer.fill_opacity)
         };
+        // Blend Interior Effects as Group off: the layer merges in its mode first and the
+        // interior effects paint over the result (`effects::premerges_layer`).
+        let premerge = photocraft_compose::effects::premerges_layer(layer);
+        if premerge {
+            let mut p = Pass::new(Kernel::Blend, 0);
+            p.a = Some(self.retain(w));
+            p.b = Some(l);
+            p.mode = layer.blend;
+            p.flags = gamma_flag(layer);
+            p.extra[3] = photocraft_compose::text_gamma(layer);
+            p.clip = Some(clip);
+            l = self.emit(p);
+        }
         for &(_, e) in &rev {
             if let Effect::PatternOverlay { common, name, id, scale, angle, link, phase } = e
-                && let Some(pat) = photocraft_doc::pattern::find(self.cx.patterns, id, name).filter(|p| !p.is_empty())
+                && let Some(pat) = photocraft_doc::pattern::find(self.cx.patterns, id, name).filter(|p| p.is_paintable())
             {
                 let paint = Paint::Pattern(pat, placement(anchor, *link, *phase, *scale, *angle));
                 l = self.paint(l, content, Cov::One, &paint, common.blend, common.opacity, F_GATE, clip, sb);
@@ -1257,7 +1271,7 @@ impl<'a> Planner<'a> {
             }
         }
 
-        let mode = if layer.blend == BlendMode::PassThrough { BlendMode::Normal } else { layer.blend };
+        let mode = if premerge || layer.blend == BlendMode::PassThrough { BlendMode::Normal } else { layer.blend };
         let late: Vec<(usize, &'a photocraft_doc::Bevel)> = rev
             .iter()
             .filter_map(|&(i, e)| if let Effect::BevelEmboss(b) = e { Some((i, b)) } else { None })
@@ -1312,7 +1326,7 @@ impl<'a> Planner<'a> {
         match p {
             FxPaint::Color(c) => Paint::Color(c.to_rgb()),
             FxPaint::Gradient(g) => Paint::Gradient(g),
-            FxPaint::Pattern { name, id, scale } => match photocraft_doc::pattern::find(self.cx.patterns, id, name).filter(|p| !p.is_empty()) {
+            FxPaint::Pattern { name, id, scale } => match photocraft_doc::pattern::find(self.cx.patterns, id, name).filter(|p| p.is_paintable()) {
                 Some(pat) => Paint::Pattern(pat, placement(anchor, true, (0.0, 0.0), *scale, 0.0)),
                 None => Paint::None,
             },

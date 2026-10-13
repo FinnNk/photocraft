@@ -604,6 +604,34 @@ fn cmyk_document_renders_via_rgb() {
     assert!(p[0] < 0.3 && (p[0] - p[1]).abs() < 0.05 && (p[1] - p[2]).abs() < 0.05 && p[3] == 1.0, "{p:?}");
 }
 
+/// Transparent pixels convert to colour in CMYK (K = 100%) and Lab (a/b = 0.5). A flattened
+/// surface must still treat them as empty, or its content spans the whole canvas.
+#[test]
+fn flatten_to_surface_leaves_transparent_pixels_empty_in_every_mode() {
+    let modes = [
+        (ColorMode::Rgb, [SampleType::U8, SampleType::U16, SampleType::F32].as_slice()),
+        (ColorMode::Grayscale, &[SampleType::U8, SampleType::U16, SampleType::F32]),
+        (ColorMode::Cmyk, &[SampleType::U8, SampleType::U16]),
+        (ColorMode::Lab, &[SampleType::U8, SampleType::U16]),
+    ];
+    for (mode, samples) in modes {
+        for &sample in samples {
+            let mut d = Document::new("t", Size::new(300, 200), mode, sample);
+            let fmt = PixelFormat::new(mode, sample, true);
+            let mut l = Layer::raster("dot", fmt);
+            let opaque: Vec<f32> = photocraft_raster::from_rgba(&fmt, [0.9, 0.4, 0.1, 1.0]);
+            l.surface_mut().unwrap().fill_rect(Rect::new(120, 80, 140, 90), &opaque);
+            d.layers.push(l);
+            let s = flatten_to_surface(&d, fmt, None);
+            assert_eq!(s.content_bounds(), Rect::new(120, 80, 140, 90), "{mode:?} {sample:?}");
+            // Over a background everything is content, as before.
+            let fmt_opaque = PixelFormat::new(mode, sample, false);
+            let s = flatten_to_surface(&d, fmt_opaque, Some([1.0, 1.0, 1.0]));
+            assert_eq!(s.rgba(5, 5)[3], 1.0, "{mode:?} {sample:?}: background stays opaque");
+        }
+    }
+}
+
 #[test]
 fn sixteen_bit_and_float_layers_composite() {
     for fmt in [PixelFormat::RGBA16, PixelFormat::RGBA32F] {
@@ -2458,4 +2486,45 @@ fn lab_documents_gradient_map_follows_lightness() {
     let mut grey_buf = Buffer::filled(Rect::new(0, 0, 1, 1), [grey[0], grey[1], grey[2], 1.0]);
     adjust::apply_in(&adj, &mut grey_buf, adjust::Transfer::Srgb, None, ColorMode::Rgb);
     assert!((buf.px[0][0] - grey_buf.px[0][0]).abs() > 0.05, "{:?} {:?}", buf.px[0], grey_buf.px[0]);
+}
+
+// The effect-map cache key covers Transparency Shapes Layer and Blend If: both change the shape
+// the maps are built from (a layer's own, or a styled group's children composite) without
+// touching pixels, masks or effects, and stale maps kept stroking a hole the layer no longer
+// had. Each case renders with the cache warm, edits, renders again and compares with a cold
+// render. (A purge by a concurrent test only makes the warm render cold, never a false failure.)
+#[test]
+fn effect_cache_follows_transparency_shapes_layer() {
+    let mut d = doc_white(32, 32);
+    let mut l = solid_layer("holed", Rect::new(0, 0, 32, 32), [0.9, 0.2, 0.2, 1.0]);
+    l.surface_mut().unwrap().fill_rect(Rect::new(12, 12, 20, 20), &[0.0, 0.0, 0.0, 0.0]);
+    l.effects.items = vec![stroke(2.0, StrokePosition::Outside)];
+    assert!(l.advanced.transparency_shapes);
+    d.layers.push(l);
+    let on = render(&d, d.bounds());
+    d.layers[1].advanced.transparency_shapes = false;
+    let warm = render(&d, d.bounds());
+    purge_effect_cache();
+    let cold = render(&d, d.bounds());
+    assert!(on.px != cold.px, "the stroke should stop rimming the hole");
+    assert!(warm.px == cold.px, "stale effect maps after turning Transparency Shapes Layer off");
+}
+
+#[test]
+fn effect_cache_follows_a_group_childs_blend_if() {
+    let mut d = doc_white(32, 32);
+    let mut child = solid_layer("bw", Rect::new(4, 4, 16, 28), [0.0, 0.0, 0.0, 1.0]);
+    child.surface_mut().unwrap().fill_rect(Rect::new(16, 4, 28, 28), &[1.0, 1.0, 1.0, 1.0]);
+    let mut g = Layer::group("g", vec![child]);
+    g.effects.items = vec![Effect::DropShadow(Shadow { size: 2.0, spread: 0.0, ..shadow(3.0, 90.0) })];
+    d.layers.push(g);
+    let before = render(&d, d.bounds());
+    let LayerContent::Group(grp) = &mut d.layers[1].content else { panic!("not a group") };
+    // Gray › This Layer: black point at 128 hides the black half.
+    grp.children[0].blend_if.set(0, [range([128, 128], [255, 255]), FULL]);
+    let warm = render(&d, d.bounds());
+    purge_effect_cache();
+    let cold = render(&d, d.bounds());
+    assert!(before.px != cold.px, "Blend If should change the group's shadow");
+    assert!(warm.px == cold.px, "stale group effect maps after a child's Blend If changed");
 }

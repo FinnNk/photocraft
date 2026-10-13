@@ -47,6 +47,21 @@ fn registering_fonts_moves_the_generation() {
     assert!(fonts::generation() > g);
 }
 
+/// Font menus cache on the shared engine's generation: other engines registering fonts (a test's
+/// throwaway one, in parallel) must not invalidate them, or the menus re-render every frame.
+#[test]
+fn only_the_shared_database_moves_the_shared_generation() {
+    let _ = crate::shared();
+    let g = fonts::shared_generation();
+    TextEngine::new().fonts.register_font_data(fonts::INTER_REGULAR.to_vec());
+    assert_eq!(fonts::shared_generation(), g, "an unrelated engine leaves it alone");
+    let mut e = TextEngine::new();
+    e.fonts.mark_shared();
+    let g = fonts::shared_generation();
+    e.fonts.register_font_data(fonts::INTER_REGULAR.to_vec());
+    assert!(fonts::shared_generation() > g);
+}
+
 #[test]
 fn literal_psd_tabs_shape_as_whitespace_without_shifting_text_offsets() {
     let mut e = TextEngine::new();
@@ -379,6 +394,41 @@ fn styles_change_pixels() {
     assert_eq!(srect.y0, prect.y0 - 10);
     let (_, hrect) = ink(&mut e, CharStyle { horizontal_scale: 2.0, ..base.clone() });
     assert!(hrect.width() as f32 > prect.width() as f32 * 1.7);
+}
+
+/// #4130: Faux bold at 72 dpi looked pixelated because the offset copies were summed into one
+/// coverage buffer, saturating every antialiased edge pixel. Edges must stay antialiased and the
+/// ink must grow only by the dilation (about perimeter x radius), not by edge saturation.
+#[test]
+fn faux_bold_keeps_antialiased_edges_at_small_sizes() {
+    let mut e = TextEngine::new();
+    let base = CharStyle { size_pt: 12.0, ..Default::default() };
+    let stats = |e: &mut TextEngine, s: CharStyle| {
+        let (_, r) = e.render(&TextLayer { transform: Affine::translate(5.0, 20.0), ..styled("Bold Test", s) }, 72.0, PixelFormat::RGBA8);
+        let (w, h) = (r.rect.width() as usize, r.rect.height() as usize);
+        let mut partial = 0usize;
+        for y in 0..h {
+            for x in 0..w {
+                let a = alpha_sum(
+                    &r.surface,
+                    photocraft_geom::Rect::new(r.rect.x0 + x as i32, r.rect.y0 + y as i32, r.rect.x0 + x as i32 + 1, r.rect.y0 + y as i32 + 1),
+                );
+                if a > 0.05 && a < 0.95 {
+                    partial += 1;
+                }
+            }
+        }
+        (alpha_sum(&r.surface, r.rect), partial)
+    };
+    let (plain_ink, plain_partial) = stats(&mut e, base.clone());
+    let (bold_ink, bold_partial) = stats(&mut e, CharStyle { faux_bold: true, ..base });
+    assert!(bold_ink > plain_ink, "bold must add ink");
+    // Weight: the old summed-coverage faux bold (before #4130) measured 282.7 total ink for this
+    // text at 12 px (plain 138.0). The antialiased version must stay close to that weight.
+    const MAIN_BOLD_INK: f64 = 282.7;
+    assert!(bold_ink >= MAIN_BOLD_INK * 0.85, "stems too thin: {bold_ink} vs old {MAIN_BOLD_INK}");
+    assert!(bold_ink <= MAIN_BOLD_INK * 1.15, "stems too heavy: {bold_ink} vs old {MAIN_BOLD_INK}");
+    assert!(bold_partial * 10 >= plain_partial * 8, "edges stay antialiased: {plain_partial} -> {bold_partial}");
 }
 
 /// #3705: Faux bold dilation must scale with horizontal and vertical glyph scaling.
@@ -1578,6 +1628,104 @@ fn a_served_script_fallback_joins_the_fallback_stack_once_it_arrives() {
     assert!(!db.fallback_stack().any(|f| f == "Cairo"), "not before it arrives");
     db.register_font_data(cairo.bytes.to_vec());
     assert!(db.fallback_stack().any(|f| f == "Cairo"), "{:?}", db.fallback_stack().collect::<Vec<_>>());
+}
+
+/// #1317: Photoshop keeps the last line of a text box whose baseline is inside the box even
+/// when its descenders hang below the bottom edge (three 35 pt lines of 25 pt type in a
+/// 91.3 pt box). A line whose baseline falls outside the box is still dropped.
+#[test]
+fn box_lines_whose_descent_hangs_below_the_box_are_kept() {
+    let mut e = TextEngine::new();
+    let mut t = styled("one\ntwo\nthree", CharStyle { size_pt: 25.0, leading_pt: Some(35.0), ..Default::default() });
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 300.0, height: 91.27 };
+    let l = e.layout(&t, 72.0);
+    assert_eq!(l.lines.len(), 3, "{:?}", l.lines.iter().map(|l| l.baseline).collect::<Vec<_>>());
+    assert!(l.lines[2].baseline <= 91.27 + 0.5);
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 300.0, height: 80.0 };
+    assert_eq!(e.layout(&t, 72.0).lines.len(), 2, "the third baseline (about 88) is below an 80 pt box");
+}
+
+/// `Txt2` with one text object for `text` whose rendered frame is frame 0, and that frame:
+/// for point text an anchor `point`, and a frame-to-text matrix `matrix` (recent Photoshop,
+/// #1317).
+fn txt2_with_frame(text: &str, point: Option<[f64; 2]>, matrix: [f64; 6]) -> Vec<u8> {
+    let mut v = txt2_with_modes(text, &[(text.encode_utf16().count() + 1, 1)]);
+    // Close the object's model early: `… >> >> ] >>` → `… >> /1 << /2 [ frame ] >> >> ] >>`.
+    let tail = b"] >> >> >> ] >>";
+    assert!(v.ends_with(tail));
+    v.truncate(v.len() - tail.len());
+    v.extend_from_slice(b"] >> >> /1 << /2 [ << /6 [ << /10 0 >> ] >> ] >> >> ] >>");
+    let pt = point.map(|[x, y]| format!("/0 [ {x:.5} {y:.5} ] ")).unwrap_or_default();
+    let m = matrix.map(|x| format!("{x:.5}")).join(" ");
+    let frames = format!("/0 << /8 << /0 [ << /0 << {pt}/2 << /2 [ {m} ] >> >> >> ] >> >>");
+    let at = v.windows(9).position(|w| w == b"/0 << >> ").unwrap();
+    v.splice(at..at + 9, frames.into_bytes().into_iter().chain(*b" "));
+    v
+}
+
+/// #1317: point text whose anchor Photoshop keeps only in its `Txt2` frame (EngineData's
+/// `PointBase` at the origin, the transform far away) is placed at that anchor, not at the
+/// ink's top left. A rewritten `TySh` (bounds near the origin) is left alone.
+#[test]
+fn txt2_frame_places_point_text_at_its_anchor() {
+    let mut t = point("2", 100.0);
+    t.transform = Affine::translate(-1000.0, -2000.0);
+    // Photoshop's text space: anchor at (1100, 2050), ink above its baseline.
+    let tysh = with_text_index(&crate::psd::build_tysh(&t, 72.0, Some([1100.0, 1980.0, 1160.0, 2050.0])), 0);
+    let txt2 = crate::psd::parse_txt2(&txt2_with_frame("2", Some([1000.0, 2100.0]), [1.0, 0.0, 0.0, 1.0, 100.0, -50.0])).unwrap();
+    let mut l = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    crate::psd::apply_txt2_frame(&mut l, &tysh, &txt2);
+    let o = l.transform.apply(photocraft_geom::Point::new(0.0, 0.0));
+    assert!((o.x - 100.0).abs() < 1e-3 && (o.y - 50.0).abs() < 1e-3, "anchor at {o:?}");
+    // Already folded in (bounds near the origin): unchanged; another text: unchanged.
+    let tysh = with_text_index(&crate::psd::build_tysh(&t, 72.0, Some([0.0, -70.0, 60.0, 0.0])), 0);
+    let mut l = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    let before = l.transform;
+    crate::psd::apply_txt2_frame(&mut l, &tysh, &txt2);
+    assert_eq!(l.transform, before);
+    let tysh = with_text_index(&crate::psd::build_tysh(&t, 72.0, Some([1100.0, 1980.0, 1160.0, 2050.0])), 0);
+    let other = crate::psd::parse_txt2(&txt2_with_frame("3", Some([1000.0, 2100.0]), [1.0, 0.0, 0.0, 1.0, 100.0, -50.0])).unwrap();
+    let mut l = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    let before = l.transform;
+    crate::psd::apply_txt2_frame(&mut l, &tysh, &other);
+    assert_eq!(l.transform, before);
+}
+
+/// `tysh` with its text-space `bounds` set to `r` (Photoshop's, where it drew the text).
+fn with_bounds(tysh: &[u8], r: [f64; 4]) -> Vec<u8> {
+    use photocraft_psd::descriptor::{Descriptor, Id, Value};
+    let mut t = crate::psd::parse_tysh(tysh).unwrap();
+    let mut d = Descriptor::default();
+    for (k, v) in ["Left", "Top ", "Rght", "Btom"].iter().zip(r) {
+        d.items.push((Id::new(k), Value::Double(v)));
+    }
+    t.text.items.retain(|(k, _)| !k.is("bounds"));
+    t.text.items.push((Id::new("bounds"), Value::Descriptor(d)));
+    crate::psd::write_tysh(&t)
+}
+
+/// #1317: a text box whose `BoxBounds` are in its `Txt2` frame's space is moved by the frame's
+/// matrix onto the `bounds` Photoshop drew it at (it used to land off the canvas, so its text
+/// "disappeared" when an edit started).
+#[test]
+fn txt2_frame_moves_box_text_onto_its_bounds() {
+    let mut t = styled("Casemiro 45", CharStyle { size_pt: 25.0, ..Default::default() });
+    t.shape = TextShape::Box { x: 500.0, y: 600.0, width: 300.0, height: 90.0 };
+    t.transform = Affine::translate(-700.0, -300.0);
+    let built = with_text_index(&crate::psd::build_tysh(&t, 72.0, None), 0);
+    let tysh = with_bounds(&built, [960.0, 300.0, 1260.0, 390.0]);
+    let txt2 = crate::psd::parse_txt2(&txt2_with_frame("Casemiro 45", None, [1.0, 0.0, 0.0, 1.0, 460.0, -300.0])).unwrap();
+    let mut l = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    assert!(matches!(l.shape, TextShape::Box { .. }));
+    crate::psd::apply_txt2_frame(&mut l, &tysh, &txt2);
+    let TextShape::Box { x, y, .. } = l.shape else { panic!("not a box") };
+    let o = l.transform.apply(photocraft_geom::Point::new(f64::from(x), f64::from(y)));
+    assert!((o.x - 260.0).abs() < 1e-3 && (o.y - 0.0).abs() < 1e-3, "box top left at {o:?}");
+    // PhotoCraft's own `TySh` (bounds = the box, frame already folded in): unchanged.
+    let mut l = crate::psd::text_layer_from_tysh(&built, 72.0).unwrap();
+    let before = l.transform;
+    crate::psd::apply_txt2_frame(&mut l, &built, &txt2);
+    assert_eq!(l.transform, before);
 }
 
 /// Preferences ▸ Type ▸ Missing Glyph Protection: off, only the default family is in the

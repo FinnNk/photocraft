@@ -124,7 +124,8 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
         Tool::Lasso | Tool::PolygonLasso => reset!(feather, anti_alias),
         Tool::MagneticLasso => reset!(feather, anti_alias, magnetic_width, magnetic_contrast, magnetic_frequency, magnetic_pressure),
         Tool::MagicWand => reset!(tolerance, anti_alias, contiguous, sample_all_layers),
-        Tool::QuickSelection | Tool::ObjectSelection => reset!(sample_all_layers, enhance_edge),
+        Tool::QuickSelection => reset!(sample_all_layers, enhance_edge),
+        Tool::ObjectSelection => reset!(sample_all_layers, enhance_edge, object_finder),
         Tool::Crop => reset!(
             crop_ratio,
             crop_delete,
