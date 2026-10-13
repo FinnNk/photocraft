@@ -27,6 +27,7 @@ mod content_aware_move;
 mod patch;
 mod pattern_stamp;
 mod remove;
+pub use content_aware_move::{ContentAwarePreview, preview as content_aware_move_preview};
 pub use patch::preview as patch_preview;
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -145,7 +146,7 @@ fn damage_json(r: Rect) -> Value {
 
 /// Which pixels Clone Stamp / Healing Brush sample.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SampleLayers {
+pub(crate) enum SampleLayers {
     Current,
     CurrentAndBelow,
     All,
@@ -162,7 +163,7 @@ fn sample_layers(p: &Value, cmd: &str) -> Result<SampleLayers> {
 
 /// Composite pixels of `rect` in `fmt` (native channels): the whole document, or the target layer
 /// and everything below it.
-fn composite_region(pre: &Document, id: Option<LayerId>, which: SampleLayers, rect: Rect, fmt: PixelFormat) -> Region {
+pub(crate) fn composite_region(pre: &Document, id: Option<LayerId>, which: SampleLayers, rect: Rect, fmt: PixelFormat) -> Region {
     let mut doc = pre.clone();
     if which == SampleLayers::CurrentAndBelow
         && let Some(id) = id
