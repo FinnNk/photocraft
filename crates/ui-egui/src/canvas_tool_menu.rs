@@ -717,7 +717,7 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
 /// A spelling row: replace the word under the pointer (the caret lands after the replacement), or
 /// add it to the user dictionary.
 fn choose_spelling(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
-    let (id, params) = engine_call(menu, command);
+    let (id, params) = engine_call(app, menu, command);
     let result = app.run(&id, params)?;
     if let Some(end) = result["end"].as_u64().map(|e| e as usize)
         && let Some(e) = app.ui.text_edit.as_mut()
