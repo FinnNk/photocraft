@@ -27,6 +27,7 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
+use std::sync::atomic::Ordering;
 
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait, RenderState, ScreenDescriptor};
 use eframe::wgpu;
@@ -112,6 +113,9 @@ pub struct GpuCanvas {
     health: photocraft_gpu::DeviceHealth,
     /// [`video_memory`] of the adapter, detected once.
     vram: Option<u64>,
+    /// [`canvas_budget`], shared with the paint callback's resources: [`GpuCanvas::format_for`]
+    /// reads it while the renderer is locked.
+    canvas_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Can `adapter` use `Rgba16Float` as a sampled, filtered, render-target and copy texture?
@@ -146,14 +150,15 @@ impl GpuCanvas {
         let info = rs.adapter.get_info();
         res.separate_mip_targets = info.backend == wgpu::Backend::Dx12;
         let vram = video_memory(&info);
-        res.canvas_budget = canvas_budget(physical_memory(), vram);
+        res.canvas_budget.store(canvas_budget(physical_memory(), vram), Ordering::Relaxed);
+        let budget = res.canvas_budget.clone();
         rs.renderer.write().callback_resources.insert(res);
         log::info!(
             "gpu canvas: target {:?}, max texture {max}, tile {tile}, 16F canvas {high:?}, video memory {}",
             rs.target_format,
             vram.map_or_else(|| "unknown".to_owned(), |b| format!("{} MB", b >> 20))
         );
-        Self { rs: rs.clone(), tile, high, health, vram }
+        Self { rs: rs.clone(), tile, high, health, vram, canvas_budget: budget }
     }
 
     /// The device's health flag (shared with the wgpu compositor and the paint callback).
@@ -203,7 +208,11 @@ impl GpuCanvas {
         let px = size[0] as u64 * size[1] as u64;
         let high = match self.high {
             HighPolicy::Off => false,
-            HighPolicy::Budget => px <= F16_BUDGET_PX,
+            // Within the canvas budget too: a 16-bit canvas a small card can't hold as floats
+            // stays on the GPU as `Rgba8Unorm` rather than falling back to the CPU canvas.
+            HighPolicy::Budget => {
+                px <= F16_BUDGET_PX && canvas_texture_bytes(size, self.tile, texel_bytes(FORMAT_HIGH)) <= self.canvas_budget.load(Ordering::Relaxed)
+            }
             HighPolicy::Always => true,
         };
         if high && depth != photocraft_doc::SampleType::U8 { FORMAT_HIGH } else { FORMAT }
@@ -239,10 +248,7 @@ impl GpuCanvas {
 
     /// Set the GPU bytes one document's display texture set may take (see [`canvas_budget`]).
     pub fn set_canvas_budget(&self, bytes: u64) {
-        let mut r = self.rs.renderer.write();
-        if let Some(res) = r.callback_resources.get_mut::<Resources>() {
-            res.canvas_budget = bytes;
-        }
+        self.canvas_budget.store(bytes, Ordering::Relaxed);
     }
 
     /// Whether `doc`'s display textures fit [`canvas_budget`]; when they don't, nothing is
@@ -251,7 +257,7 @@ impl GpuCanvas {
         let size = [doc.size.width, doc.size.height];
         let bytes = canvas_texture_bytes(size, self.tile, texel_bytes(self.format_for(doc.depth, size)));
         let r = self.rs.renderer.read();
-        r.callback_resources.get::<Resources>().is_some_and(|res| bytes <= res.canvas_budget)
+        r.callback_resources.get::<Resources>().is_some_and(|res| bytes <= res.canvas_budget.load(Ordering::Relaxed))
     }
 
     /// Cap lower-stack composite reuse; zero disables it for profiling the uncached path.
@@ -1365,7 +1371,7 @@ struct Resources {
     compositor_cache_budget: Option<u64>,
     compositor_focus: Option<photocraft_geom::Rect>,
     /// GPU bytes one document's display texture set may take (see [`canvas_budget`]).
-    canvas_budget: u64,
+    canvas_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
     encode_bgl: wgpu::BindGroupLayout,
     encode_pipeline: wgpu::RenderPipeline,
     lut_bgl: wgpu::BindGroupLayout,
@@ -1631,7 +1637,7 @@ impl Resources {
             compositor_budget: None,
             compositor_cache_budget: None,
             compositor_focus: None,
-            canvas_budget: canvas_budget(physical_memory(), None),
+            canvas_budget: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(canvas_budget(physical_memory(), None))),
             encode_bgl,
             encode_pipeline,
         }
@@ -1670,7 +1676,7 @@ impl DocTextures {
     /// The texture set for a `size` canvas, or `None` (nothing created) when it doesn't fit
     /// the canvas budget.
     fn new(device: &wgpu::Device, res: &Resources, size: [u32; 2], tile: u32, format: wgpu::TextureFormat) -> Option<Self> {
-        if canvas_texture_bytes(size, tile, texel_bytes(format)) > res.canvas_budget {
+        if canvas_texture_bytes(size, tile, texel_bytes(format)) > res.canvas_budget.load(Ordering::Relaxed) {
             return None;
         }
         let mut tiles = Vec::new();
