@@ -671,6 +671,19 @@ pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
         LayerContent::Fill(_) => canvas,
         _ => {
             let b = layer.surface().map_or(Rect::EMPTY, bounds::content_bounds);
+            let b = match &layer.content {
+                LayerContent::Shape(sh) => {
+                    let p = shape_bounds(sh).map(|r| r.intersect(&canvas)).unwrap_or(Rect::EMPTY);
+                    if !b.is_empty() && !p.is_empty() {
+                        b.union(&p)
+                    } else if !p.is_empty() {
+                        p
+                    } else {
+                        b
+                    }
+                }
+                _ => b,
+            };
             // Effects follow a filled shape's outline, also where its fill is transparent.
             match effect_outline(layer).and_then(|_| paint_bounds(layer)).filter(|_| effects::has_effects(layer)) {
                 Some(p) if !b.is_empty() => b.union(&p),
@@ -765,6 +778,17 @@ pub fn paint_bounds(layer: &Layer) -> Option<Rect> {
     let LayerContent::Shape(sh) = &layer.content else { return None };
     let (x0, y0, x1, y1) = sh.path.control_bounds()?;
     let r = Rect::new(x0.floor() as i32, y0.floor() as i32, x1.floor() as i32, y1.floor() as i32);
+    (!r.is_empty()).then_some(r)
+}
+
+/// The bounding box of a shape layer's vector content: its path control bounds plus stroke width.
+pub fn shape_bounds(sh: &photocraft_doc::ShapeLayer) -> Option<Rect> {
+    if sh.fill.is_none() && sh.stroke.as_ref().is_none_or(|s| s.width <= 0.0 || s.opacity <= 0.0) {
+        return None;
+    }
+    let (x0, y0, x1, y1) = sh.path.control_bounds()?;
+    let stroke_margin = sh.stroke.as_ref().filter(|s| s.opacity > 0.0).map_or(0.0, |s| s.width.ceil()) as i32;
+    let r = Rect::new(x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32).inflate(stroke_margin);
     (!r.is_empty()).then_some(r)
 }
 
@@ -1121,7 +1145,7 @@ fn blend_if_weight(layer: &Layer, mode: photocraft_color::ColorMode, this: Optio
     let mut k = 1.0;
     for (side, px) in [this, under].into_iter().enumerate() {
         let Some(p) = px else { continue };
-        let v = |c: usize| p[c].clamp(0.0, 1.0) * 255.0;
+        let v = |c: usize| blend_if_level(p[c]);
         match mode {
             // Gray is the colour channels' luma (Rec. 601 weights), then R, G, B.
             M::Rgb => {
@@ -1140,6 +1164,17 @@ fn blend_if_weight(layer: &Layer, mode: photocraft_color::ColorMode, this: Optio
         }
     }
     k
+}
+
+/// A channel value on Blend If's 0..=255 scale. Compositing can leave an 8- or 16-bit level a few
+/// millionths off (a level-20 backdrop composited at partial alpha reads 19.999998), which would
+/// put it on the wrong side of a hard point at that level: a value that close to a level is that
+/// level. Values of those depths that aren't on a level are at least 1/257 away from one. The GPU
+/// compositor (`compose.wgsl` `blend_if_weight`) snaps alike.
+fn blend_if_level(x: f32) -> f32 {
+    let v = x.clamp(0.0, 1.0) * 255.0;
+    let r = v.round();
+    if (v - r).abs() < 1e-4 { r } else { v }
 }
 
 /// Apply `layer`'s Blend If to a finished composite: `out` (the backdrop with the layer drawn)
