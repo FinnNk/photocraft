@@ -697,10 +697,12 @@ fn feed_live_stroke(app: &mut PhotocraftApp) {
         return;
     }
     l.fed = d.points.len();
+    let started = crate::gpu_canvas::now_ms();
     match l.stroke.push(&pts) {
         Ok(r) => l.damage.push(r),
         Err(_) => app.live_stroke = None,
     }
+    app.stroke_trace.stroke(crate::gpu_canvas::now_ms() - started);
 }
 
 /// The points the live retouching stroke has rendered.
@@ -1957,6 +1959,7 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
 /// Tabs + canvas for the active document, or the start screen; then drops layers dragged onto
 /// another document (`layer_transfer`).
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    crate::distort_ui::drop_foreign(app);
     documents(app, ui);
     crate::layer_transfer::finish(app, ui.ctx());
     // Once a frame, not per document view: the right-click or options-bar Brush Preset picker.
@@ -2573,9 +2576,10 @@ pub fn fmt_zoom(pct: f32) -> String {
     if (pct - pct.round()).abs() < 0.05 { format!("{}", pct.round() as i64) } else { format!("{pct:.1}") }
 }
 
-/// Repeating dot-grid texture for the canvas surround.
+/// Repeating dot-grid texture for the canvas surround. A theme whose dots are its canvas colour
+/// has no pattern to show, so it gets no texture at all rather than an invisible one (#4542).
 fn dots(ctx: &egui::Context, t: &crate::theme::Tokens) -> Option<egui::TextureId> {
-    if t.bevel {
+    if t.bevel || t.canvas_dot == t.canvas {
         return None;
     }
     let key = egui::Id::new(("canvas-dots", format!("{:?}", t.kind)));
@@ -5460,7 +5464,9 @@ fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
     {
         app.session.clear_live_stroke();
     }
+    let started = crate::gpu_canvas::now_ms();
     let result = app.run(stroke_command(app, d.tool), p);
+    app.stroke_trace.stroke(crate::gpu_canvas::now_ms() - started);
     app.session.clear_live_stroke();
     let Ok(r) = result else { return };
     let revision = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.revision);
@@ -5997,6 +6003,32 @@ mod tests {
         app.session.add_document((*first).clone(), None);
         app.sync_views();
         assert_ne!(ensure_texture(&mut app, &ctx, 1, Some(1)).unwrap().0, a, "reopening a preserved ID creates a fresh texture");
+    }
+
+    #[test]
+    fn only_themes_with_a_dot_pattern_tile_the_canvas_surround() {
+        // #4542: switching to Pro filled the empty workspace with red blocks on one GPU. Pro's
+        // dots are its canvas colour, so the tiled texture had nothing to show in the first place.
+        use crate::theme::ThemeKind;
+        let tiles = |ctx: &egui::Context, kind: ThemeKind| {
+            crate::theme::apply(ctx, kind);
+            let mut output = ctx.run_ui(Default::default(), |ui| paint_dots(ui, ui.max_rect(), true));
+            output.textures_delta.clear();
+            output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Mesh(_)))
+        };
+        let uploaded = |ctx: &egui::Context| ctx.tex_manager().read().allocated().filter(|(_, meta)| meta.name == "canvas-dots").count();
+        for kind in ThemeKind::ALL {
+            let ctx = egui::Context::default();
+            let dotted = matches!(kind, ThemeKind::Studio | ThemeKind::StudioLight | ThemeKind::SolarizedDark);
+            assert_eq!(tiles(&ctx, kind), dotted, "{kind:?}");
+            assert_eq!(uploaded(&ctx), usize::from(dotted), "{kind:?}");
+        }
+        // The reported switch: a dotted theme, then Pro.
+        let ctx = egui::Context::default();
+        assert!(tiles(&ctx, ThemeKind::Studio));
+        assert!(!tiles(&ctx, ThemeKind::Pro));
+        assert!(!tiles(&ctx, ThemeKind::ProMedium));
+        assert_eq!(uploaded(&ctx), 1, "only Studio's dots were uploaded");
     }
 
     #[test]

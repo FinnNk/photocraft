@@ -68,6 +68,17 @@ fn appearance_defaults_and_legacy_theme_migrate() {
 }
 
 #[test]
+fn legacy_theme_migration_preserves_saved_theme_slots() {
+    for (legacy, slot, saved) in [("proMedium", "darkTheme", "solarizedDark"), ("studioLight", "lightTheme", "adwaita")] {
+        let mut interface = json!({"theme": legacy});
+        interface[slot] = json!(saved);
+        let mut session = Session::new();
+        session.load_prefs_json(&json!({"interface": interface}).to_string()).unwrap();
+        assert_eq!(session.prefs_value()["interface"][slot], saved, "explicit {slot} survives migration");
+    }
+}
+
+#[test]
 fn appearance_choices_validate_and_legacy_theme_still_selects() {
     let mut s = Session::new();
     s.execute("prefs.set", json!({"values": {"interface.appearanceMode": "auto", "interface.darkTheme": "studio", "interface.lightTheme": "classic"}}))
@@ -384,6 +395,19 @@ fn menus_and_toolbar_customisation_persist() {
     s.execute("edit.toolbar", json!({"hidden": ["Sponge"]})).unwrap();
     let back: Preferences = serde_json::from_str(&s.prefs_to_json()).unwrap();
     assert_eq!(back.toolbar.hidden, vec!["Sponge".to_string()]);
+}
+
+/// #5096: Edit › Menus can't hide the way back into itself, Preferences, Save or Exit.
+#[test]
+fn menus_refuse_to_hide_essential_items() {
+    let mut s = session();
+    for id in ["edit.menus", "edit.keyboardShortcuts", "edit.preferences.general", "file.save", "file.saveAs", "file.exit"] {
+        assert!(s.execute("edit.menus", json!({"hide": ["edit.fade", id]})).is_err(), "{id}");
+        assert!(s.prefs().menus.hidden.is_empty(), "{id}: a refused call changes nothing");
+    }
+    // A preferences file that lists them anyway still shows them.
+    let menus = MenuCustomization { hidden: vec!["file.exit".into(), "edit.fade".into()], ..Default::default() };
+    assert!(!menus.is_hidden("file.exit") && menus.is_hidden("edit.fade"));
 }
 
 #[test]

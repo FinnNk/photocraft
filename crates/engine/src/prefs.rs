@@ -954,6 +954,20 @@ pub struct MenuCustomization {
     pub colors: BTreeMap<String, String>,
 }
 
+impl MenuCustomization {
+    /// False for the items Edit › Menus can't hide (#5096): the way back into this dialog
+    /// (Edit › Menus, Edit › Keyboard Shortcuts), Preferences, Save, Save As and Exit.
+    pub fn hideable(id: &str) -> bool {
+        !matches!(id, "edit.menus" | "edit.keyboardShortcuts" | "file.save" | "file.saveAs" | "file.exit") && !id.starts_with("edit.preferences")
+    }
+
+    /// Whether the menus leave `id` out. Items that can't be hidden stay shown even when an
+    /// older or hand-edited preferences file lists them.
+    pub fn is_hidden(&self, id: &str) -> bool {
+        Self::hideable(id) && self.hidden.iter().any(|h| h == id)
+    }
+}
+
 /// Edit › Toolbar: hidden tools and a custom order (tool names as in `ui.set {tool}`).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1553,7 +1567,8 @@ impl Session {
                 }
             };
             interface.insert("appearanceMode".into(), json!(mode));
-            interface.insert(slot.into(), json!(theme.name()));
+            // A partially migrated file may already contain a newer theme selection (#5139).
+            interface.entry(slot).or_insert_with(|| json!(theme.name()));
         }
         let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));
@@ -1897,6 +1912,9 @@ fn menus(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let (hide, show) = (ids("hide"), ids("show"));
+    if let Some(id) = hide.iter().find(|id| !MenuCustomization::hideable(id)) {
+        return Err(bad("edit.menus", format!("`{id}` can't be hidden")));
+    }
     s.edit_prefs(|pr| {
         if p.get("reset").and_then(Value::as_bool) == Some(true) {
             pr.menus = MenuCustomization::default();

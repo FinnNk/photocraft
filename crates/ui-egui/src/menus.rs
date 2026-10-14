@@ -1111,7 +1111,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         }
     }
     if !prefs.menus.hidden.is_empty() {
-        items.retain(|i| !prefs.menus.hidden.contains(&i.id));
+        items.retain(|i| !prefs.menus.is_hidden(&i.id));
     }
     if prefs.interface.show_menu_colors {
         for it in &mut items {
