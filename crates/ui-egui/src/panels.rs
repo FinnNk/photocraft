@@ -3089,6 +3089,13 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let entries = st.history.entries();
     let current = entries.len() - 1;
     let redo: Vec<String> = st.history.redo_labels().map(str::to_string).collect();
+    let selected_snap = selected_snapshot(ui.ctx(), st);
+    let ctx = ui.ctx().clone();
+    // A row dragged onto the trash (#5324); a drag that never saw its release must not outlive it.
+    if !ctx.input(|i| i.pointer.primary_down() || i.pointer.any_released()) {
+        ctx.data_mut(|d| d.remove::<HistoryDrag>(history_drag_key()));
+    }
+    let drag = ctx.data(|d| d.get_temp::<HistoryDrag>(history_drag_key()));
     // Snapshot row (Photoshop shows the document's opening state with a thumbnail).
     {
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
@@ -3112,11 +3119,18 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical().id_salt("history-rows").max_height(max_h).auto_shrink([false, false]).show(ui, |ui| {
         // Snapshots head the list and scroll with the states, so many of them never push the
         // footer out of a short dock.
-        snap_cmd = snapshot_rows(app, ui);
+        snap_cmd = snapshot_rows(app, ui, selected_snap);
         for (i, (e, is_redo)) in all.enumerate() {
-            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, i == current, &e));
-            if i == current {
+            // The current state shows selected unless a snapshot is (Photoshop highlights one row).
+            let selected = i == current && selected_snap.is_none();
+            // Past states can be dragged onto the trash; the oldest one can't be deleted.
+            let sense = if is_redo || i == 0 { Sense::click() } else { Sense::click_and_drag() };
+            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), sense);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &e));
+            if resp.drag_started() {
+                ui.ctx().data_mut(|d| d.insert_temp(history_drag_key(), HistoryDrag::State(i)));
+            }
+            if selected {
                 ui.painter().rect_filled(rect, if t.pro { 0.0 } else { t.radius_sm }, if t.pro { t.row_selected } else { t.accent_soft });
             } else if resp.hovered() {
                 ui.painter().rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
@@ -3140,35 +3154,73 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.painter().text(pos2(rect.left() + 58.0, rect.center().y), Align2::LEFT_CENTER, &e, egui::FontId::proportional(12.0), color);
             if resp.clicked() && i != current {
                 target = Some(i);
+            } else if resp.clicked() && selected_snap.is_some() {
+                // The current state is already the document: clicking it only selects it.
+                ctx.data_mut(|d| d.remove::<SelectedSnapshot>(selected_snapshot_key(doc.id)));
             }
         }
     });
-    let mut footer_cmd: Option<&str> = None;
+    if let Some(drag) = drag
+        && let Some(p) = ctx.input(|i| i.pointer.interact_pos())
+    {
+        let label = match drag {
+            HistoryDrag::Snapshot(id) => app.session.active().and_then(|st| st.snapshots.iter().find(|s| s.id == id)).map(|s| s.name.clone()),
+            HistoryDrag::State(i) => entries.get(i).cloned(),
+        };
+        crate::layer_transfer::ghost(&ctx, p, &label.unwrap_or_default());
+    }
+    let mut footer_cmd: Option<(&str, Value)> = None;
     if t.pro {
-        let can_delete = app.session.is_enabled("history.deleteState");
+        // With a snapshot selected the trash deletes it, as in Photoshop (#5324).
+        let can_delete = selected_snap.is_some() || app.session.is_enabled("history.deleteState");
         let can_new = app.session.is_enabled("history.newDocument");
         widgets::panel_footer(ui, |ui| {
-            if ui.add_enabled_ui(can_delete, |ui| icons::button(ui, "trash", 26.0, false, tl!("Delete current state"))).inner.clicked() {
-                footer_cmd = Some("history.deleteState");
+            let trash = ui.add_enabled_ui(can_delete, |ui| icons::button(ui, "trash", 26.0, false, tl!("Delete current state"))).inner;
+            if trash.clicked() {
+                footer_cmd = Some(match selected_snap {
+                    Some(id) => ("history.deleteSnapshot", json!({"snapshot": id})),
+                    None => ("history.deleteState", json!({})),
+                });
+            }
+            // A snapshot or a past state dragged onto the trash is deleted (#5324).
+            if let Some(drag) = drag
+                && dropped_on(ui, &trash)
+            {
+                footer_cmd = Some(match drag {
+                    HistoryDrag::Snapshot(id) => ("history.deleteSnapshot", json!({"snapshot": id})),
+                    HistoryDrag::State(i) => ("history.deleteState", json!({"state": i})),
+                });
             }
             let can_snap = app.session.is_enabled("history.newSnapshot");
             if ui.add_enabled_ui(can_snap, |ui| icons::button(ui, "scan", 26.0, false, tl!("Create new snapshot"))).inner.clicked() {
-                footer_cmd = Some("history.newSnapshot");
+                footer_cmd = Some(("history.newSnapshot", json!({})));
             }
             if ui.add_enabled_ui(can_new, |ui| icons::button(ui, "file-plus", 26.0, false, tl!("Create new document from current state"))).inner.clicked() {
-                footer_cmd = Some("history.newDocument");
+                footer_cmd = Some(("history.newDocument", json!({})));
             }
         });
+    }
+    if ctx.input(|i| i.pointer.any_released()) {
+        ctx.data_mut(|d| d.remove::<HistoryDrag>(history_drag_key()));
     }
     // An open Free Transform owns Undo (transform_tool::intercept): stepping the document's history under
     // its box would leave it transforming pixels that changed.
     // Selecting a snapshot changes the document, so it waits for an open transform like the rows.
     let snap_cmd = snap_cmd.filter(|(cmd, _)| *cmd != "history.selectSnapshot" || app.ui.transform.is_none());
-    if let Some((cmd, p)) = footer_cmd.map(|c| (c, json!({}))).filter(|_| app.ui.transform.is_none()).or(snap_cmd)
-        && let Err(e) = app.run(cmd, p)
-    {
-        app.ui.status = e;
-        app.ui.status_error = true;
+    if let Some((cmd, p)) = footer_cmd.filter(|_| app.ui.transform.is_none()).or(snap_cmd) {
+        let picked = (cmd == "history.selectSnapshot").then(|| p.get("snapshot").and_then(Value::as_u64)).flatten();
+        match app.run(cmd, p) {
+            Err(e) => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+            // The snapshot stays selected while the document is the state the click made.
+            Ok(_) => {
+                if let (Some(id), Some(st)) = (picked, app.session.active()) {
+                    ctx.data_mut(|d| d.insert_temp::<SelectedSnapshot>(selected_snapshot_key(st.doc.id), (id, history_spot(st))));
+                }
+            }
+        }
     }
     // One command per click (#2966): stepping with Undo/Redo once per state made the canvas
     // recomposite the whole document.
@@ -3180,11 +3232,49 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// A History panel row being dragged, for a drop on the trash (#5324).
+#[derive(Clone, Copy, Debug)]
+enum HistoryDrag {
+    Snapshot(u64),
+    State(usize),
+}
+
+fn history_drag_key() -> egui::Id {
+    egui::Id::new("history-drag")
+}
+
+/// The snapshot the History panel shows selected (#5324), and where the history stood after its
+/// click: the number of past states, the current state's name and the number of redo states.
+type SelectedSnapshot = (u64, HistorySpot);
+type HistorySpot = (usize, Option<String>, usize);
+
+fn history_spot(st: &photocraft_engine::DocState) -> HistorySpot {
+    (st.history.past_len(), st.history.entries().pop(), st.history.redo_labels().count())
+}
+
+fn selected_snapshot_key(doc: photocraft_doc::DocId) -> egui::Id {
+    egui::Id::new(("history-snapshot-selected", doc))
+}
+
+/// The selected snapshot: the one last clicked, while it still exists and the history is still at
+/// the state that click made. Any other step (an edit, Undo, a state row) deselects it, as in
+/// Photoshop.
+fn selected_snapshot(ctx: &egui::Context, st: &photocraft_engine::DocState) -> Option<u64> {
+    let key = selected_snapshot_key(st.doc.id);
+    let (id, spot) = ctx.data(|d| d.get_temp::<SelectedSnapshot>(key))?;
+    let live = spot == history_spot(st) && st.snapshots.iter().any(|s| s.id == id);
+    if !live {
+        ctx.data_mut(|d| d.remove::<SelectedSnapshot>(key));
+    }
+    live.then_some(id)
+}
+
 /// The History panel's snapshot rows (#2966), under the opening row, each with its thumbnail and
-/// name: a click returns to the snapshot (a new state), a double-click or right-click › Rename…
-/// edits the name in place (Enter or a click elsewhere keeps it, Escape cancels), and
-/// right-click › Delete removes it. Returns the command a row asks for.
-fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<(&'static str, Value)> {
+/// name: a click returns to the snapshot (a new state) and selects it, a double-click or
+/// right-click › Rename… edits the name in place (Enter or a click elsewhere keeps it, Escape
+/// cancels), right-click › Delete removes it, and a drag onto the trash too (#5324). Returns the
+/// command a row asks for.
+fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: Option<u64>) -> Option<(&'static str, Value)> {
     let t = Tokens::get(ui.ctx());
     let st = app.session.active()?;
     let (doc_id, snaps) = (st.doc.id, st.snapshots.clone());
@@ -3195,9 +3285,15 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<(&'static
     let mut cmd = None;
     let ctx = ui.ctx().clone();
     for snap in &snaps {
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &snap.name));
-        if resp.hovered() {
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click_and_drag());
+        let is_selected = selected == Some(snap.id);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, is_selected, &snap.name));
+        if resp.drag_started() {
+            ctx.data_mut(|d| d.insert_temp(history_drag_key(), HistoryDrag::Snapshot(snap.id)));
+        }
+        if is_selected {
+            ui.painter().rect_filled(rect, if t.pro { 0.0 } else { t.radius_sm }, if t.pro { t.row_selected } else { t.accent_soft });
+        } else if resp.hovered() {
             ui.painter().rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
         }
         let thumb = Rect::from_min_size(pos2(rect.left() + 28.0, rect.center().y - 14.0), vec2(28.0, 28.0));
@@ -4601,7 +4697,7 @@ mod history_transform_tests {
 mod snapshot_row_tests {
     use egui::vec2;
     use egui_kittest::Harness;
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
     use serde_json::json;
 
     use super::*;
@@ -4670,6 +4766,110 @@ mod snapshot_row_tests {
         h.run_steps(2);
         assert!(snapshot_names(&h).is_empty());
         assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 2, "deleting leaves the history alone");
+    }
+
+    /// A History panel in the Photoshop theme (the footer with the trash) on red, Snapshot 1, blue.
+    fn pro_history() -> Harness<'static, PhotocraftApp> {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.run("history.newSnapshot", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        let mut h = Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| history(app, ui), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.state_mut().ui.theme = crate::theme::ThemeKind::ProMedium;
+        h.run_steps(3);
+        h
+    }
+
+    /// The footer's trash: the rightmost of its 26 pt buttons (the bar lays them out right to left).
+    fn trash(h: &Harness<'static, PhotocraftApp>) -> egui::Pos2 {
+        let buttons: Vec<Rect> = h
+            .ctx
+            .viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == vec2(26.0, 26.0)).map(|w| w.rect).collect());
+        buttons.into_iter().max_by(|a, b| a.center().x.total_cmp(&b.center().x)).unwrap().center()
+    }
+
+    fn click(h: &mut Harness<'static, PhotocraftApp>, p: egui::Pos2) {
+        h.hover_at(p);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+        }
+    }
+
+    fn selected(h: &Harness<'static, PhotocraftApp>, label: &str) -> bool {
+        h.get_all_by_label(label).next().unwrap().accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
+    }
+
+    /// Press on `from`, drag in small steps to `to` and release there.
+    fn drag(h: &mut Harness<'static, PhotocraftApp>, from: egui::Pos2, to: egui::Pos2) {
+        h.event(egui::Event::PointerMoved(from));
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        for k in 1..=10 {
+            h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 10.0)));
+            h.step();
+        }
+        h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+    }
+
+    /// Clicking a snapshot selects it, and the trash then deletes the snapshot instead of a state
+    /// (#5324). Any other step deselects it, and the trash deletes the current state again.
+    #[test]
+    fn the_trash_deletes_the_selected_snapshot() {
+        let mut h = pro_history();
+        h.get_by_label("Snapshot 1").click();
+        h.run_steps(2);
+        let steps = h.state().session.active().unwrap().history.entries().len();
+        assert!(selected(&h, "Snapshot 1"), "the clicked snapshot shows selected");
+        let p = trash(&h);
+        click(&mut h, p);
+        let st = h.state().session.active().unwrap();
+        assert!(st.snapshots.is_empty(), "the trash deleted the snapshot");
+        assert_eq!(st.history.entries().len(), steps, "and left the states alone");
+
+        // An edit after the click deselects the snapshot: the trash deletes the state.
+        let mut h = pro_history();
+        h.get_by_label("Snapshot 1").click();
+        h.run_steps(2);
+        h.state_mut().run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+        h.run_steps(2);
+        assert!(!selected(&h, "Snapshot 1"), "an edit deselects the snapshot");
+        let steps = h.state().session.active().unwrap().history.entries().len();
+        let p = trash(&h);
+        click(&mut h, p);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.snapshots.len(), 1, "the snapshot is kept");
+        assert_eq!(st.history.entries().len(), steps - 1, "the current state is deleted");
+    }
+
+    /// A snapshot or a past state dragged onto the trash is deleted (#5324).
+    #[test]
+    fn rows_dragged_onto_the_trash_are_deleted() {
+        let mut h = pro_history();
+        let steps = h.state().session.active().unwrap().history.entries().len();
+        let row = h.get_by_label("Snapshot 1").rect().center();
+        let to = trash(&h);
+        drag(&mut h, egui::pos2(row.x, row.y), to);
+        let st = h.state().session.active().unwrap();
+        assert!(st.snapshots.is_empty(), "the dragged snapshot is deleted");
+        assert_eq!(st.history.entries().len(), steps, "no state is");
+
+        // The second-to-last state: it and the state after it go, as with Delete.
+        let mut h = pro_history();
+        // The states are Open (or New), New Layer, Fill, Fill: drag New Layer.
+        let entries = h.state().session.active().unwrap().history.entries();
+        assert_eq!(entries.len(), 4, "{entries:?}");
+        let row = h.get_by_label(&entries[1]).rect().center();
+        let to = trash(&h);
+        drag(&mut h, egui::pos2(row.x, row.y), to);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.history.entries().len(), 1, "the dragged state and the ones after it are deleted");
+        assert_eq!(st.snapshots.len(), 1, "the snapshot is kept");
     }
 
     /// Snapshot rows scroll with the states: many snapshots in a short dock leave the footer and

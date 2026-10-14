@@ -86,6 +86,7 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
     const POS: &[(&str, &str)] = &[("outside", "Outside"), ("inside", "Inside"), ("center", "Center")];
     const GSTYLE: &[(&str, &str)] = &[("linear", "Linear"), ("radial", "Radial"), ("angle", "Angle"), ("reflected", "Reflected"), ("diamond", "Diamond")];
     const BSTYLE: &[(&str, &str)] = &[("inner", "Inner Bevel"), ("outer", "Outer Bevel"), ("emboss", "Emboss"), ("pillow", "Pillow Emboss")];
+    const TECHNIQUE: &[(&str, &str)] = &[("smooth", "Smooth"), ("chiselHard", "Chisel Hard"), ("chiselSoft", "Chisel Soft")];
     const DIR: &[(&str, &str)] = &[("up", "Up"), ("down", "Down")];
     const SRC: &[(&str, &str)] = &[("edge", "Edge"), ("center", "Center")];
     const CONTOUR: P = P::Contour(Some("antiAlias"));
@@ -163,6 +164,7 @@ fn spec(kind: &str) -> &'static [(&'static str, &'static str, P)] {
         ],
         "bevelEmboss" => &[
             ("style", "Style", P::Choice(BSTYLE)),
+            ("technique", "Technique", P::Choice(TECHNIQUE)),
             ("depth", "Depth", P::Slider(1.0, 1000.0, "%")),
             ("direction", "Direction", P::Choice(DIR)),
             ("size", "Size", P::Slider(0.0, 250.0, "px")),
@@ -1855,6 +1857,26 @@ mod tests {
         assert_eq!(s.active().unwrap().doc.global_light.angle, 45.0);
         let d = s.active().unwrap();
         assert_eq!(d.doc.layer(id).unwrap().effects.items.len(), 2);
+    }
+
+    #[test]
+    fn bevel_technique_is_selectable_and_round_trips() {
+        let Some((_, _, P::Choice(options))) = spec("bevelEmboss").iter().find(|(k, _, _)| *k == "technique") else {
+            panic!("Bevel & Emboss has no Technique dropdown");
+        };
+        let values: Vec<&str> = options.iter().map(|(v, _)| *v).collect();
+        assert_eq!(values, ["smooth", "chiselHard", "chiselSoft"]);
+
+        let mut s = session();
+        s.execute("layer.layerStyle.bevelEmboss", json!({"technique": "chiselSoft"})).unwrap();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let mut f = initial_fields(st.doc.layer(id).unwrap(), Some("bevelEmboss"), st.doc.global_light.angle);
+        assert_eq!(entry(&f, "fx1").unwrap()["params"]["technique"], json!("chiselSoft"));
+        set_param(&mut f, "fx1", "technique", json!("chiselHard"));
+        apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let Effect::BevelEmboss(b) = &s.active().unwrap().doc.layer(id).unwrap().effects.items[0] else { panic!("expected bevel") };
+        assert_eq!(b.technique, photocraft_doc::effects::BevelTechnique::ChiselHard);
     }
 
     #[test]

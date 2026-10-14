@@ -982,7 +982,6 @@
 	Contiguous	Contiguo
 	Contrast	Contrasto
 	Control:	Controllo:
-	Convert document's colors to the working space	Converti colori documento in spazio di lavoro
 	Convert to sRGB	Converti in sRGB
 	Copies	Copie
 	Copper	Rame
@@ -1564,7 +1563,6 @@
 	Use Default	Usa predefinito
 	Use Legacy	Usa legacy
 	Use Measurement Scale	Usa scala misurazione
-	Use the embedded profile (instead of the working space)	Usa profilo incorporato (invece dello spazio di lavoro)
 	Variables bind a layer's visibility, text or pixels to a named data slot.	Le variabili collegano visibilità, testo o pixel di un livello a uno slot dati nominato.
 	Vertical scale	Scala verticale
 	Vibrance	Vividezza
@@ -2196,7 +2194,6 @@
 	Cancelled opening {name}	Apertura {name} annullata
 	The document “{name}” does not have an embedded {mode} profile.	Il documento “{name}” non ha un profilo {mode} incorporato.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Il documento “{name}” ha un profilo colore incorporato che non corrisponde allo spazio di lavoro {mode} corrente.
-	Embedded: {embedded}	Incorporato: {embedded}
 	Working: {working}	Di lavoro: {working}
 	Developing {name}	Sviluppo di {name}
 	Cancelled {label}	{label} annullato
@@ -4108,6 +4105,21 @@ navigator	Zoom	Zoom
 	Sent to {printer}	Inviato a {printer}
 	set in Print Settings…	impostato nelle impostazioni di stampa…
 	ICO is limited to 256 × 256 pixels	ICO è limitato a 256 × 256 pixel
+# Embedded Profile Mismatch: profile names beside the choices, Remember this choice
+	Use the embedded profile ({profile})	Usa profilo incorporato ({profile})
+	Convert to the working space ({profile})	Converti in spazio di lavoro ({profile})
+	Remember this choice for future images	Ricorda questa scelta per le prossime immagini
+	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	Riattiva la richiesta con Ask On Mismatch in Modifica › Impostazioni colore.
+	Button Mode	Modalità pulsante
+	Button Mode On	Modalità pulsante attiva
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	Scurisci interfaccia
+	Lighten Interface	Schiarisci interfaccia
+# Bevel & Emboss Technique.
+	Technique	Tecnica
+	Chisel Hard	Cesello duro
+	Chisel Soft	Cesello morbido
+	Open color-less EXR as ACEScg	Apri gli EXR senza spazio colore come ACEScg
 
 # Color management, Liquify, glyph group, warp and Camera Raw labels the Serbian, Vietnamese and Japanese catalogs added
 	Adobe-rgb-compat	Adobe RGB (compatibile)

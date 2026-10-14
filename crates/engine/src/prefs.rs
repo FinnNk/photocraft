@@ -525,6 +525,9 @@ pub struct FileHandling {
     pub recover_on_launch: bool,
     /// Open a file with no ICC profile as untagged even when its EXIF ColorSpace tag says sRGB.
     pub ignore_exif_profile_tag: bool,
+    /// Most renderers write ACEScg EXRs without stating the colour space. With this on, an EXR
+    /// that would otherwise open as linear sRGB opens as ACEScg (AP1, linear) instead.
+    pub exr_aces_cg: bool,
     pub ask_before_saving_layered_tiff: bool,
     pub maximize_psd_compatibility: Ask,
     /// SVG groups deeper than this are rasterised on import; parser and document safety caps remain fixed.
@@ -544,6 +547,7 @@ impl Default for FileHandling {
             autosave_minutes: 10,
             recover_on_launch: true,
             ignore_exif_profile_tag: false,
+            exr_aces_cg: false,
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,
             rasterize_svg_groups_deeper_than: photocraft_doc::MAX_GROUP_DEPTH as u32,
