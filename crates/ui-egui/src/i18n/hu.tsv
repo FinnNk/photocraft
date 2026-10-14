@@ -4011,7 +4011,8 @@ cameraRaw	Yellow	Sárga
 	The layer or its mask changed. Drag the mask onto the Trash again.	A réteg vagy a maszkja megváltozott. Húzd újra a maszkot a Kukába.
 	Transform On Drop	Átalakítás elengedéskor
 	Vanishing Point is not active	Az Enyészpont nem aktív
-	Vanishing Point: click four corners to create a plane	Enyészpont: sík létrehozásához kattints a négy sarokra
+	Vanishing Point: click four corners to create a plane	Enyészpont: sík létrehozásához kattintson a négy sarokra
+	Show home recent files	Legutóbbi fájlok megjelenítése a kezdőképernyőn
 	Clear Brush Controls	Ecsetvezérlők törlése
 	Reset All Locked Settings	Összes zárolt beállítás visszaállítása
 	Copy Texture to Other Tools	Textúra másolása más eszközökre

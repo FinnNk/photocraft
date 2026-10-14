@@ -250,6 +250,14 @@ fn step_label(id: &str, params: &Value) -> String {
     if id == "actions.play" {
         let target = params.get("action").map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())).unwrap_or_default();
         format!("{}: {target}", label_of(id))
+    } else if id == "layer.select" {
+        let target = params
+            .get("name")
+            .and_then(Value::as_str)
+            .or_else(|| params.get("layer").and_then(Value::as_str))
+            .map(str::to_owned)
+            .or_else(|| params.get("layer").and_then(Value::as_u64).map(|id| format!("ID {id}")));
+        target.map_or_else(|| label_of(id), |target| format!("{} ({target})", label_of(id)))
     } else if id == "actions.conditional" {
         // "If hasLayers: FS8-Layers / FS8-No-Layers"
         let cond = params.get("if").and_then(Value::as_str).unwrap_or("?");
@@ -912,6 +920,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn selected_layer_name_is_visible_during_recording_and_after_stop() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":4,"height":4})).unwrap();
+        app.run("layer.setProps", json!({"name":"Background"})).unwrap();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        app.run("actions.record", json!({"name":"Select photo"})).unwrap();
+        app.ui.actions.expanded = vec![true];
+        app.run("layer.select", json!({"layer":layer.0})).unwrap();
+        let mut h = Harness::builder().with_size(vec2(400.0, 260.0)).build_ui_state(|ui, app| panel(app, ui), app);
+        h.run_steps(4);
+        h.get_by_label("Select Layer (Background)");
+        h.state_mut().run("actions.stop", json!({})).unwrap();
+        h.run_steps(4);
+        h.get_by_label("Select Layer (Background)");
+        assert_eq!(step_label("layer.select", &json!({"layer":26})), "Select Layer (ID 26)");
+        assert_eq!(step_label("layer.select", &json!({"layer":"Background"})), "Select Layer (Background)");
+    }
+
+    #[test]
     fn actions_list_grows_with_panel_and_keeps_footer_visible() {
         use egui_kittest::{Harness, kittest::Queryable};
         let bottom = |height: f32| {
@@ -1288,6 +1316,81 @@ mod tests {
         assert!(played.get("failed").is_none(), "{played}");
         assert_eq!(*written.borrow(), ["out/result.psd", "out/result.psd"]);
         assert_eq!(app.session.active().unwrap().path.as_deref(), Some("out/result.psd"));
+    }
+
+    /// An app with the real importer/exporter and writer whose Save dialogs answer `answers`.
+    fn disk_app(answers: Vec<Option<crate::file_dialog::FileDialogAnswer>>) -> PhotocraftApp {
+        let services = crate::Services {
+            import: Some(Box::new(|name, bytes, depth| {
+                photocraft_io::import_with_svg_group_depth(name, bytes, depth).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            })),
+            export: Some(Box::new(|doc, path, _| {
+                photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
+            })),
+            write: Some(Box::new(|path, bytes| std::fs::write(path, bytes).map_err(|e| e.to_string()))),
+            file_dialog: Some(crate::file_dialog::fake(answers).0),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.background_jobs = false;
+        app
+    }
+
+    /// Records Invert + File › Save on the file `a`, then plays it on the file `b` (given a
+    /// new layer first when `layered`). Returns the played result and whether `b` / `a`
+    /// changed on disk.
+    fn record_save_on_a_play_on_b(ext: &str, layered: bool) -> (Value, bool, bool) {
+        use crate::file_dialog::FileDialogAnswer::SaveTo;
+        let dir = std::env::temp_dir().join(format!("photocraft-rec-save-{ext}-{layered}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = |n: &str| dir.join(format!("{n}.{ext}")).to_string_lossy().into_owned();
+        let (a, b) = (path("a"), path("b"));
+        // The dialog confirms the suggested name, which is the document's own file.
+        let mut app = disk_app(vec![Some(SaveTo(a.clone())), Some(SaveTo(a.clone()))]);
+        let ctx = egui::Context::default();
+        for p in [&a, &b] {
+            app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+            app.save_as(Some(p.clone())).unwrap();
+        }
+        let (before_a, before_b) = (std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap());
+        app.open_path(&a).unwrap();
+        app.run("actions.record", json!({})).unwrap();
+        app.run("image.adjustments.invert", json!({})).unwrap();
+        crate::menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        app.run("actions.stop", json!({})).unwrap();
+        std::fs::write(&a, &before_a).unwrap();
+        app.open_path(&b).unwrap();
+        if layered {
+            app.run("layer.new.layer", json!({})).unwrap();
+        }
+        let played = app.run("actions.play", json!({"action": 0})).unwrap();
+        let r = (played, std::fs::read(&b).unwrap() != before_b, std::fs::read(&a).unwrap() != before_a);
+        let _ = std::fs::remove_dir_all(&dir);
+        r
+    }
+
+    #[test]
+    fn recorded_save_overwrites_the_layered_file_the_action_is_played_on() {
+        let (played, b_changed, a_changed) = record_save_on_a_play_on_b("psd", false);
+        assert!(played.get("failed").is_none(), "{played}");
+        assert!(b_changed && !a_changed);
+    }
+
+    #[test]
+    fn recorded_save_overwrites_the_flat_file_the_action_is_played_on() {
+        let (played, b_changed, a_changed) = record_save_on_a_play_on_b("png", false);
+        assert!(played.get("failed").is_none(), "{played}");
+        assert!(b_changed, "Save did not overwrite the file the action was played on");
+        assert!(!a_changed, "Save wrote the file the action was recorded on");
+    }
+
+    #[test]
+    fn recorded_save_never_flattens_layers_over_a_flat_file() {
+        // The played-on document has layers its PNG can't keep: the step fails, nothing is written (#3806).
+        let (played, b_changed, a_changed) = record_save_on_a_play_on_b("png", true);
+        assert!(played.get("failed").is_some(), "{played}");
+        assert!(!b_changed && !a_changed);
     }
 
     #[test]

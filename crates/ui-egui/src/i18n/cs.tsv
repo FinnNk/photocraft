@@ -3717,6 +3717,7 @@ navigator	Zoom	Zvětšení
 	Remove after each stroke	Odstranit po každém tahu
 	Apply the removal ({key})	Použít odstranění ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Tahy k odstranění: {n} (Enter použije, Esc zruší)
+	Show home recent files	Zobrazit nedávné soubory na úvodní obrazovce
 	Clear Brush Controls	Obnovit ovládací prvky stopy
 	Reset All Locked Settings	Obnovit všechna zamknutá nastavení
 	Copy Texture to Other Tools	Kopírovat texturu do jiných nástrojů

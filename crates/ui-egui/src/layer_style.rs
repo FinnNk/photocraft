@@ -1990,6 +1990,56 @@ mod tests {
         assert_eq!(color(&d.doc), photocraft_color::Color::rgb(0.0, 1.0, 0.0), "OK commits with Preview off");
     }
 
+    /// #3648's steps in one dialog session: disable the stroke row, add a Color Overlay,
+    /// untick Preview. Preview off shows the document as saved — the stroke was never
+    /// disabled in it, so it keeps rendering until OK, exactly like Photoshop's preview
+    /// semantics; nothing disabled resurrects, and OK applies the dialog's state.
+    #[test]
+    fn issue_steps_disable_stroke_add_overlay_untick_preview() {
+        let mut s = session();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+        // Steps 1-3: a stroke is enabled and OK'd; reopening the dialog loads it enabled.
+        s.execute("layer.layerStyle.stroke", json!({"size": 40, "position": "inside", "color": "#00ff00"})).unwrap();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let mut f = initial_fields(st.doc.layer(id).unwrap(), None, st.doc.global_light.angle);
+        let rows = f["effects"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "the saved stroke is the only row");
+        assert_eq!((rows[0]["kind"].as_str(), rows[0]["on"].as_bool()), (Some("stroke"), Some(true)));
+        // Step 4: disable the stroke row — a pending edit, the document is untouched.
+        f["effects"][0]["on"] = json!(false);
+        // Step 5: add a Color Overlay (a new instance: no fx snapshot, factory defaults).
+        f["effects"].as_array_mut().unwrap().push(json!({
+            "id": "fx2",
+            "kind": "colorOverlay",
+            "on": true,
+            "params": {"color": "#0000ff"},
+        }));
+        // While Preview is on, the live preview honours the in-dialog disable: the stroke
+        // is disabled in the scratch document, the overlay renders.
+        let shown = preview_document(&st.doc, &s.patterns, &f).unwrap();
+        let mut shown_effects = shown.layer(id).unwrap().effects.items.iter();
+        assert!(!shown_effects.find(|e| kind_of(e) == "stroke").is_none_or(|e| e.enabled()), "the preview leaves the stroke off");
+        assert!(shown_effects.find(|e| kind_of(e) == "colorOverlay").is_some_and(|e| e.enabled()), "the preview shows the overlay");
+        // Step 6: untick Preview — the canvas shows the real document, whose stroke is
+        // still enabled (the disable is an unapplied edit). This is the state the issue
+        // reports; it is the saved state, not a resurrected effect.
+        f.insert("preview".into(), json!(false));
+        let green: Vec<f32> = serde_json::from_value(s.execute("document.pixel", json!({"x": 32, "y": 32})).unwrap()).unwrap();
+        assert!(green[1] > 0.9 && green[0] < 0.1, "preview off shows the saved stroke: {green:?}");
+        // OK (with Preview off) applies the dialog state: the stroke is now disabled in the
+        // document too, the overlay shows, and the dialog — which never models the list's
+        // master switch — leaves it at its default.
+        apply(&f, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let d = s.active().unwrap();
+        let effects = &d.doc.layer(id).unwrap().effects;
+        assert!(!effects.items.iter().find(|e| kind_of(e) == "stroke").is_none_or(|e| e.enabled()), "OK disables the stroke");
+        assert!(effects.items.iter().find(|e| kind_of(e) == "colorOverlay").is_some_and(|e| e.enabled()), "OK keeps the overlay on");
+        assert!(effects.enabled, "the list's master switch keeps its value");
+        let blue: Vec<f32> = serde_json::from_value(s.execute("document.pixel", json!({"x": 32, "y": 32})).unwrap()).unwrap();
+        assert!(blue[2] > 0.9 && blue[1] < 0.1, "after OK only the overlay renders: {blue:?}");
+    }
+
     #[test]
     fn new_style_saves_pending_state_and_a_swatch_apply_restores_it() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());

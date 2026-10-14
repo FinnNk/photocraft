@@ -325,7 +325,9 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
                             crate::notices::post(app, title, lines, false, None);
                             app.save_as_with(None, tga_bits)
                         }
-                        _ => app.save_as_with(None, tga_bits),
+                        // A flat file asks for its name; confirming its own file records a
+                        // plain Save that writes the file an action is played on (#3531).
+                        _ => app.save_dialog_flow(None, tga_bits, true),
                     }
                 }
             }
@@ -1111,7 +1113,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         }
     }
     if !prefs.menus.hidden.is_empty() {
-        items.retain(|i| !prefs.menus.hidden.contains(&i.id));
+        items.retain(|i| !prefs.menus.is_hidden(&i.id));
     }
     if prefs.interface.show_menu_colors {
         for it in &mut items {

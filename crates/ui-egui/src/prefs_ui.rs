@@ -1753,8 +1753,10 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
                     }
                     ui.label(if changed { RichText::new(tl!("modified")).color(t.text_faint).size(10.5) } else { RichText::new("") });
                 } else {
-                    let mut visible = !hidden.contains(id);
-                    crate::widgets::checkbox(ui, &mut visible, tl!("Visible"));
+                    // Edit › Menus, Keyboard Shortcuts, Preferences, Save and Exit always stay (#5096).
+                    let hideable = photocraft_engine::prefs::MenuCustomization::hideable(id);
+                    let mut visible = !hideable || !hidden.contains(id);
+                    ui.add_enabled_ui(hideable, |ui| crate::widgets::checkbox(ui, &mut visible, tl!("Visible")));
                     if visible {
                         hidden.retain(|h| h != id);
                     } else if !hidden.contains(id) {
@@ -3181,6 +3183,16 @@ mod tests {
         let (mut app, _) = app_with_store();
         app.run("edit.menus", json!({"hide": ["edit.fade"]})).unwrap();
         assert!(!crate::menus::menu_items(&app).iter().any(|i| i.id == "edit.fade"));
+    }
+
+    /// #5096: preferences that list Edit › Menus or File › Exit as hidden still show them.
+    #[test]
+    fn essential_menu_items_stay_visible() {
+        let (mut app, _) = app_with_store();
+        app.run("prefs.set", json!({"values": {"menus": {"hidden": ["edit.menus", "file.exit", "edit.fade"], "colors": {}}}})).unwrap();
+        let items = crate::menus::menu_items(&app);
+        assert!(items.iter().any(|i| i.id == "edit.menus") && items.iter().any(|i| i.id == "file.exit"));
+        assert!(!items.iter().any(|i| i.id == "edit.fade"));
     }
 
     #[test]

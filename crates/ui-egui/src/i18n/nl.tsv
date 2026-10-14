@@ -3869,6 +3869,7 @@ curves	Smooth	Vloeiend maken
 	Remove after each stroke	Verwijderen na elke streek
 	Apply the removal ({key})	Verwijdering toepassen ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Streken om te verwijderen: {n} (Enter past toe, Esc annuleert)
+	Show home recent files	Recente bestanden tonen op het startscherm
 	Clear Brush Controls	Penseelbesturing wissen
 	Reset All Locked Settings	Alle vergrendelde instellingen opnieuw instellen
 	Copy Texture to Other Tools	Structuur kopiëren naar andere gereedschappen

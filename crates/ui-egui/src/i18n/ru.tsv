@@ -3055,6 +3055,7 @@ curves	Smooth	Сгладить
 	Remove after each stroke	Удалять после каждого штриха
 	Apply the removal ({key})	Применить удаление ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Штрихов к удалению: {n} (Enter применяет, Esc отменяет)
+	Show home recent files	Показывать недавние файлы на домашнем экране
 	Clear Brush Controls	Очистить параметры кисти
 	Reset All Locked Settings	Сбросить все заблокированные параметры
 	Copy Texture to Other Tools	Скопировать текстуру в другие инструменты

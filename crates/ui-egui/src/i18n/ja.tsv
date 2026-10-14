@@ -3718,7 +3718,8 @@ curves	Smooth	スムーズ
 	No object found there — drag a rectangle around it	そこにオブジェクトが見つかりません — 周囲に矩形をドラッグしてください
 	Remove after each stroke	ストロークごとに削除
 	Apply the removal ({key})	削除を適用 ({key})
-	Strokes to remove: {n} (Enter applies, Esc cancels)	削除するストローク: {n} (Enter で適用、Esc で取り消し)
+	Strokes to remove: {n} (Enter applies, Esc cancels)	削除するストローク: {n}（Enter で適用、Esc で取り消し）
+	Show home recent files	ホーム画面に最近使ったファイルを表示
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	アクションを読み込み…

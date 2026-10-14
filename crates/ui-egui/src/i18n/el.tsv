@@ -3807,6 +3807,7 @@ curves	Smooth	Εξομάλυνση
 	Remove after each stroke	Αφαίρεση μετά από κάθε πινελιά
 	Apply the removal ({key})	Εφαρμογή της αφαίρεσης ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Πινελιές προς αφαίρεση: {n} (Enter εφαρμόζει, Esc ακυρώνει)
+	Show home recent files	Εμφάνιση πρόσφατων αρχείων στην αρχική οθόνη
 	Clear Brush Controls	Απαλοιφή στοιχείων ελέγχου πινέλου
 	Reset All Locked Settings	Επαναφορά όλων των κλειδωμένων ρυθμίσεων
 	Copy Texture to Other Tools	Αντιγραφή υφής σε άλλα εργαλεία

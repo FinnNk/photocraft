@@ -2794,6 +2794,7 @@ curves	Smooth	Suavizar
 	Remove after each stroke	Eliminar después de cada trazo
 	Apply the removal ({key})	Aplicar la eliminación ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Trazos por eliminar: {n} (Intro aplica, Esc cancela)
+	Show home recent files	Mostrar archivos recientes en la pantalla de inicio
 	Clear Brush Controls	Borrar controles de pincel
 	Reset All Locked Settings	Restaurar todos los ajustes bloqueados
 	Copy Texture to Other Tools	Copiar textura en otras herramientas

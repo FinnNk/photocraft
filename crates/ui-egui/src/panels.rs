@@ -646,9 +646,9 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ("Pixel Art".to_string(), tl!("Pixel Art")),
                         ("Motion".to_string(), tl!("Motion")),
                     ];
-                    // A narrow bar drops what is also in a menu, Discord first (below), then
-                    // the theme toggle (Preferences), then search (Edit › Search), and narrows
-                    // the switcher (Window › Workspace) before anything runs over.
+                    // A narrow bar drops what is also in a menu, the theme toggle first
+                    // (Preferences), then search (Edit › Search), and narrows the switcher
+                    // (Window › Workspace) before anything runs over.
                     let room = ui.available_width();
                     let icons_shown: u8 = if room >= WORKSPACE_MIN + 2.0 * ICON_SLOT {
                         2
@@ -679,25 +679,6 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             crate::prefs_ui::cycle_appearance(app, ui.ctx());
                         }
                         button.context_menu(|ui| crate::prefs_ui::appearance_context_menu(app, ui));
-                    }
-                    // The community Discord, one click away while the bar has room for it
-                    // (narrow windows drop it first; it is also Help › Discord).
-                    if ui.available_width() >= DISCORD_ROOM {
-                        let discord = egui::Button::image_and_text(
-                            icons::image("message-square", 14.0, t.text_dim),
-                            egui::RichText::new(tl!("Discord")).color(t.text_dim).size(12.0),
-                        )
-                        .frame(false);
-                        if ui
-                            .add(discord)
-                            .on_hover_text({
-                                let template = "Join the ArtCraft Discord ({url})";
-                                crate::i18n::fmt(tl!(template), &[("url", crate::links::DISCORD)])
-                            })
-                            .clicked()
-                        {
-                            crate::links::open(app, ui.ctx(), crate::links::DISCORD);
-                        }
                     }
                     if rtl { ui.min_rect().right() } else { ui.min_rect().left() }
                 };
@@ -755,8 +736,6 @@ pub fn sync_window_title(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// Minimum space kept between the window title and the menus or controls beside it.
 const TITLE_GAP: f32 = 16.0;
-/// Free room the title bar needs after its other controls to show the Discord button.
-const DISCORD_ROOM: f32 = 120.0;
 /// The workspace switcher's narrowest width, and one 28 pt title-bar icon with its spacing.
 const WORKSPACE_MIN: f32 = 90.0;
 const ICON_SLOT: f32 = 34.0;
@@ -1847,14 +1826,13 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     );
     // Color Sampler points (#1046): each under its number, with its position in the current ruler
     // unit and the same RGB/CMYK readout as the pointer (one composite pixel each).
-    let samplers = app.session.execute("view.colorSamplers.list", json!({})).ok();
-    let samplers = samplers.as_ref().and_then(|v| v["samplers"].as_array()).cloned().unwrap_or_default();
+    let samplers = sampler_readouts(app);
     if !samplers.is_empty() {
         widgets::hairline(ui);
         let cell = |ui: &mut egui::Ui, s: String| {
             ui.label(RichText::new(s).font(mono.clone()).color(t.text));
         };
-        for s in &samplers {
+        for s in samplers.iter() {
             let n = s["number"].as_i64().unwrap_or(0);
             let at = s["position"]
                 .as_array()
@@ -1875,6 +1853,25 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             });
         }
     }
+}
+
+/// The Info panel's Color Sampler readouts and the (document, revision) they were composited for.
+pub(crate) type SamplerReadouts = ((photocraft_doc::DocId, u64), std::sync::Arc<Vec<Value>>);
+
+/// The Color Sampler readouts of the active document, composited once per revision (#4528):
+/// adding, moving or deleting a sampler and every pixel edit bump the revision, so between them
+/// the Info panel reuses them instead of compositing each point through the stack every frame.
+pub(crate) fn sampler_readouts(app: &mut PhotocraftApp) -> std::sync::Arc<Vec<Value>> {
+    let Some(key) = app.session.active().map(|s| (s.doc.id, s.revision)) else { return std::sync::Arc::default() };
+    if let Some((k, v)) = &app.info_samplers
+        && *k == key
+    {
+        return v.clone();
+    }
+    let list = app.session.execute("view.colorSamplers.list", json!({})).ok();
+    let v = std::sync::Arc::new(list.as_ref().and_then(|v| v["samplers"].as_array()).cloned().unwrap_or_default());
+    app.info_samplers = Some((key, v.clone()));
+    v
 }
 
 fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -6056,3 +6053,27 @@ mod properties_target_regressions {
 #[cfg(test)]
 #[path = "history_panel_select_tests.rs"]
 mod history_panel_select_tests;
+
+#[cfg(test)]
+mod sampler_readout_tests {
+    use super::*;
+
+    /// Composited once per revision: repeated frames share the readouts; adding a sampler or an
+    /// edit recomputes them (#4528).
+    #[test]
+    fn sampler_readouts_are_reused_until_the_document_changes() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32, "background": "white"})).unwrap();
+        app.run("view.colorSamplers.add", json!({"x": 4, "y": 4})).unwrap();
+        let a = sampler_readouts(&mut app);
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0]["rgb"], json!([255, 255, 255]));
+        assert!(std::sync::Arc::ptr_eq(&a, &sampler_readouts(&mut app)), "the next frame reuses them");
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let b = sampler_readouts(&mut app);
+        assert!(!std::sync::Arc::ptr_eq(&a, &b));
+        assert_eq!(b[0]["rgb"], json!([255, 0, 0]), "an edit shows");
+        app.run("view.colorSamplers.add", json!({"x": 8, "y": 8})).unwrap();
+        assert_eq!(sampler_readouts(&mut app).len(), 2, "so does a new sampler");
+    }
+}

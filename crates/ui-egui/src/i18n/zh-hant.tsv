@@ -2704,6 +2704,7 @@ curves	Smooth	平滑
 	Remove after each stroke	每次描邊後移除
 	Apply the removal ({key})	套用移除 ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	待移除的描邊：{n}（Enter 套用，Esc 取消）
+	Show home recent files	在主畫面上顯示最近的檔案
 	Clear Brush Controls	清除筆刷控制項
 	Reset All Locked Settings	重設所有鎖定的設定
 	Copy Texture to Other Tools	複製紋理至其他工具

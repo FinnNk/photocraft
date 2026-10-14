@@ -3592,6 +3592,7 @@ curves	Smooth	Làm mượt
 	Remove after each stroke	Xóa sau mỗi nét vẽ
 	Apply the removal ({key})	Áp dụng việc xóa ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Nét vẽ cần xóa: {n} (Enter áp dụng, Esc hủy)
+	Show home recent files	Hiện tệp gần đây trên màn hình chính
 	Clear Brush Controls	Xóa điều khiển cọ
 	Reset All Locked Settings	Đặt lại tất cả cài đặt đã khóa
 	Copy Texture to Other Tools	Sao chép họa tiết sang các công cụ khác
