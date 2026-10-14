@@ -79,7 +79,7 @@ impl AtomicFs for RealFs {
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         #[cfg(unix)]
         {
-            sync_file(&std::fs::File::open(dir)?)
+            open_dir_for_sync(dir)?.map_or(Ok(()), |d| sync_file(&d))
         }
         #[cfg(not(unix))]
         {
@@ -204,6 +204,17 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
     // any other failure is reported, so the caller keeps the document unsaved and its recovery
     // data instead of discarding them on a save that may not last.
     dir_synced(fs.sync_dir(&dir)).map_err(|e| unconfirmed_error(e, path))
+}
+
+/// `dir` opened to flush it, or `None` when it can't be opened for that because it has no read
+/// permission (a write-and-search-only folder): no flush can be attempted there, so none failed.
+/// Any other error is returned.
+pub fn open_dir_for_sync(dir: &Path) -> io::Result<Option<std::fs::File>> {
+    match std::fs::File::open(dir) {
+        Ok(d) => Ok(Some(d)),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// `result` of flushing a directory, with "this file system can't flush directories" counted as

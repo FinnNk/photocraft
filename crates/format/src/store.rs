@@ -562,7 +562,8 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8]) -> Result<()> {
         // that may not survive a power loss isn't followed by removing what the old one needs.
         #[cfg(unix)]
         {
-            crate::atomic::dir_synced(std::fs::File::open(parent).and_then(|d| d.sync_all())).map_err(|e| {
+            let flushed = crate::atomic::open_dir_for_sync(parent).and_then(|d| d.map_or(Ok(()), |d| d.sync_all()));
+            crate::atomic::dir_synced(flushed).map_err(|e| {
                 FormatError::Io(std::io::Error::new(
                     e.kind(),
                     format!(
