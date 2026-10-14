@@ -558,9 +558,19 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8]) -> Result<()> {
         // itself, never its referent, even if one appears after this check.
         validate_bundle_file(root, path)?;
         crate::atomic::retry_rename(crate::atomic::RenameRetry::platform(), || std::fs::rename(&tmp, path))?;
+        // As in `atomic_write`: a failed directory flush is reported (#4968), so a manifest
+        // that may not survive a power loss isn't followed by removing what the old one needs.
         #[cfg(unix)]
         {
-            let _ = std::fs::File::open(parent).and_then(|d| d.sync_all());
+            crate::atomic::dir_synced(std::fs::File::open(parent).and_then(|d| d.sync_all())).map_err(|e| {
+                FormatError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!(
+                        "{} was written, but its folder could not be flushed to disk, so the save may not survive a power loss or crash: {e}",
+                        path.display()
+                    ),
+                ))
+            })?;
         }
         Ok(())
     })();

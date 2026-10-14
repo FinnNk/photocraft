@@ -199,10 +199,54 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
         let _ = fs.remove(&tmp);
         return Err(rename_error(e, path));
     }
-    // The new bytes are in place; a failed directory fsync can't be undone and must not report
-    // the save as failed, so it is best effort.
-    let _ = fs.sync_dir(&dir);
-    Ok(())
+    // The new bytes are in place, but until the directory is flushed the rename may not survive
+    // a power loss (#4968). A file system that can't flush directories at all counts as done;
+    // any other failure is reported, so the caller keeps the document unsaved and its recovery
+    // data instead of discarding them on a save that may not last.
+    dir_synced(fs.sync_dir(&dir)).map_err(|e| unconfirmed_error(e, path))
+}
+
+/// `result` of flushing a directory, with "this file system can't flush directories" counted as
+/// success: `EINVAL` (Linux file systems without directory fsync), `ENOTSUP`/`EOPNOTSUPP` and,
+/// on Apple platforms, `ENOTTY`, or [`io::ErrorKind::Unsupported`]. Waiting or retrying won't
+/// change those, and failing every save there would make saving impossible. Any other error is
+/// returned: the flush was attempted and failed.
+pub fn dir_synced(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(e) if dir_sync_unsupported(&e) => Ok(()),
+        other => other,
+    }
+}
+
+fn dir_sync_unsupported(e: &io::Error) -> bool {
+    if e.kind() == io::ErrorKind::Unsupported {
+        return true;
+    }
+    // errno values: EINVAL is 22 everywhere; ENOTSUP and EOPNOTSUPP are 95 on Linux and
+    // Android, 45 and 102 on Apple platforms, 45 on the BSDs; ENOTTY is 25.
+    const EINVAL: i32 = 22;
+    let unsupported: &[i32] = if cfg!(any(target_os = "linux", target_os = "android")) {
+        &[EINVAL, 95]
+    } else if cfg!(target_vendor = "apple") {
+        &[EINVAL, 45, 102, 25]
+    } else if cfg!(unix) {
+        &[EINVAL, 45]
+    } else {
+        &[]
+    };
+    e.raw_os_error().is_some_and(|code| unsupported.contains(&code))
+}
+
+/// The error for a file that was published but whose directory flush failed: same kind, saying
+/// the file is in place but may not survive a power loss.
+fn unconfirmed_error(e: io::Error, path: &Path) -> io::Error {
+    context(
+        e,
+        format!(
+            "{} was written, but the folder could not be flushed to disk, so the save may not survive a power loss or crash; save again or to another folder",
+            path.display()
+        ),
+    )
 }
 
 /// Run `rename`, retrying with backoff while it fails with `PermissionDenied` (see
