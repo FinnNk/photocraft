@@ -131,7 +131,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 36] = [
+pub const UI_SET_FIELDS: [&str; 37] = [
     "tool",
     "panels",
     "dock",
@@ -164,6 +164,7 @@ pub const UI_SET_FIELDS: [&str; 36] = [
     "cropOverlayShow",
     "cropOverlayOrientation",
     "cropShield",
+    "cropFill",
     "shapeStroke",
     "camTransformOnDrop",
     "tileGrid",
@@ -534,6 +535,15 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     Some(_) => return Err("cropOverlayOrientation must be 0, 1, 2 or 3".into()),
                     None => None,
                 };
+                // The Crop tool's Fill (#3823): "background" (Background (Default)) or "contentAware".
+                let crop_content_aware = match p.get("cropFill") {
+                    Some(v) => Some(match v.as_str() {
+                        Some("background") => false,
+                        Some("contentAware") => true,
+                        _ => return Err("cropFill must be \"background\" or \"contentAware\"".into()),
+                    }),
+                    None => None,
+                };
                 // The Crop tool's gear menu: Show Cropped Area and the shield (#1919).
                 let crop_shield = merged_object(&app.ui.tool_options.crop_shield, p.get("cropShield"), "cropShield")?;
                 if crop_shield.as_ref().is_some_and(|s| !(0.0..=100.0).contains(&s.opacity)) {
@@ -679,6 +689,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(k) = crop_overlay {
                     app.ui.tool_options.crop_overlay = k;
+                }
+                if let Some(on) = crop_content_aware {
+                    app.ui.tool_options.crop_content_aware = on;
                 }
                 if let Some(v) = crop_overlay_show {
                     app.ui.tool_options.crop_overlay_show = v;
@@ -2026,6 +2039,22 @@ mod tests {
         assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["tool"], "ColorSampler");
         // The `I` key group cycles through the eyedropper tools, so the sampler is on the same key.
         assert_eq!(Tool::ColorSampler.key(), 'I');
+    }
+
+    /// #3823: the Crop tool's Fill over the control channel, reported by `ui.inspect`.
+    #[test]
+    fn ui_set_drives_the_crop_fill() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool": "crop", "cropFill": "contentAware"}))["ok"], true);
+        assert!(app.ui.tool_options.crop_content_aware);
+        assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"]["crop_content_aware"], true);
+        for bad in [json!("generativeExpand"), json!(true), json!(1)] {
+            assert_eq!(call(&mut app, &ctx, "ui.set", json!({"cropFill": bad}))["ok"], false, "{bad}");
+            assert!(app.ui.tool_options.crop_content_aware, "{bad}: unchanged");
+        }
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"cropFill": "background"}))["ok"], true);
+        assert!(!app.ui.tool_options.crop_content_aware);
     }
 
     /// #1919: the Crop tool's overlay menu over the control channel, reported by `ui.inspect`.
