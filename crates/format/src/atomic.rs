@@ -209,7 +209,8 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
 /// `dir` opened to flush it, or `None` when it can't be opened for that because it has no read
 /// permission (a write-and-search-only folder): no flush can be attempted there, so none failed.
 /// Any other error is returned.
-pub fn open_dir_for_sync(dir: &Path) -> io::Result<Option<std::fs::File>> {
+#[cfg(unix)]
+fn open_dir_for_sync(dir: &Path) -> io::Result<Option<std::fs::File>> {
     match std::fs::File::open(dir) {
         Ok(d) => Ok(Some(d)),
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Ok(None),
@@ -222,7 +223,7 @@ pub fn open_dir_for_sync(dir: &Path) -> io::Result<Option<std::fs::File>> {
 /// on Apple platforms, `ENOTTY`, or [`io::ErrorKind::Unsupported`]. Waiting or retrying won't
 /// change those, and failing every save there would make saving impossible. Any other error is
 /// returned: the flush was attempted and failed.
-pub fn dir_synced(result: io::Result<()>) -> io::Result<()> {
+pub(crate) fn dir_synced(result: io::Result<()>) -> io::Result<()> {
     match result {
         Err(e) if dir_sync_unsupported(&e) => Ok(()),
         other => other,
