@@ -468,8 +468,10 @@ impl GpuCanvas {
         }
         // A full refresh whose layer pages don't fit the memory budget would re-upload the
         // evicted ones every time (no faster than the CPU, and more memory): the banded CPU
-        // compositor does it, and edits in the view (damage rects) stay on the GPU.
-        if region == doc.bounds() && !comp.fits_budget(doc, region) {
+        // compositor does it (in the background on desktop). So does a large damage rect, such
+        // as hiding a big layer (#4024); small edits in the view stay on the GPU.
+        let large = region.width() as u64 * region.height() as u64 >= DEFER_PX;
+        if (region == doc.bounds() || large) && !comp.fits_budget(doc, region) {
             res.compositor = Some(comp);
             return Err(photocraft_gpu::Unsupported(OVER_BUDGET.into()));
         }
