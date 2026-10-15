@@ -1331,7 +1331,20 @@ pub fn video_memory(adapter: &wgpu::AdapterInfo) -> Option<u64> {
     if adapter.device_type != wgpu::DeviceType::DiscreteGpu {
         return None;
     }
-    detect_video_memory(adapter.vendor, adapter.device).filter(|b| *b > 0)
+    // Detected once per adapter, as `physical_memory` is: on Windows each detection builds a
+    // DXGI factory, and startup asks three times. Keyed by the adapter, since a GPU retry can
+    // pick another one.
+    /// (vendor, device) ids and the memory found for them.
+    type Seen = Vec<((u32, u32), Option<u64>)>;
+    static SEEN: std::sync::Mutex<Seen> = std::sync::Mutex::new(Vec::new());
+    let key = (adapter.vendor, adapter.device);
+    let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, bytes)) = seen.iter().find(|(k, _)| *k == key) {
+        return *bytes;
+    }
+    let bytes = detect_video_memory(key.0, key.1).filter(|b| *b > 0);
+    seen.push((key, bytes));
+    bytes
 }
 
 #[cfg(windows)]
@@ -1347,8 +1360,15 @@ fn detect_video_memory(vendor: u32, device: u32) -> Option<u64> {
 
 #[cfg(target_os = "linux")]
 fn detect_video_memory(vendor: u32, device: u32) -> Option<u64> {
+    drm_video_memory(std::path::Path::new("/sys/class/drm"), vendor, device)
+}
+
+/// amdgpu's VRAM size (`<card>/device/mem_info_vram_total`, bytes) of the card under `drm` (the
+/// sysfs `/sys/class/drm` folder) whose PCI `vendor` and `device` ids (hex files beside it) match.
+#[cfg(any(target_os = "linux", test))]
+fn drm_video_memory(drm: &std::path::Path, vendor: u32, device: u32) -> Option<u64> {
     let hex = |p: std::path::PathBuf| u32::from_str_radix(std::fs::read_to_string(p).ok()?.trim().trim_start_matches("0x"), 16).ok();
-    std::fs::read_dir("/sys/class/drm").ok()?.flatten().find_map(|card| {
+    std::fs::read_dir(drm).ok()?.flatten().find_map(|card| {
         let dev = card.path().join("device");
         if hex(dev.join("vendor"))? != vendor || hex(dev.join("device"))? != device {
             return None;
@@ -2352,6 +2372,33 @@ mod tests {
             assert_eq!(detect_video_memory(d.VendorId, d.DeviceId), Some(first.DedicatedVideoMemory as u64));
         }
         assert_eq!(detect_video_memory(0xdead, 0xbeef), None, "no such adapter");
+    }
+
+    /// The Linux reader finds the card by its PCI ids in a `/sys/class/drm`-shaped folder and reads
+    /// amdgpu's VRAM size; a card without one, unreadable ids or a malformed size give nothing.
+    #[test]
+    fn drm_video_memory_reads_the_matching_cards_vram() {
+        let drm = std::env::temp_dir().join(format!("pc-drm-{}", std::process::id()));
+        let card = |name: &str, vendor: &str, device: &str, vram: Option<&str>| {
+            let dev = drm.join(name).join("device");
+            std::fs::create_dir_all(&dev).unwrap();
+            std::fs::write(dev.join("vendor"), vendor).unwrap();
+            std::fs::write(dev.join("device"), device).unwrap();
+            if let Some(v) = vram {
+                std::fs::write(dev.join("mem_info_vram_total"), v).unwrap();
+            }
+        };
+        // An Intel iGPU (no VRAM file), an AMD card, and an entry with garbage ids.
+        card("card0", "0x8086\n", "0x9a49\n", None);
+        card("card1", "0x1002\n", "0x73bf\n", Some("17163091968\n"));
+        card("card2", "not hex\n", "0x73bf\n", Some("1\n"));
+        card("card3", "0x10de\n", "0x2684\n", Some("lots\n"));
+        assert_eq!(drm_video_memory(&drm, 0x1002, 0x73bf), Some(17_163_091_968));
+        assert_eq!(drm_video_memory(&drm, 0x8086, 0x9a49), None, "no amdgpu VRAM file");
+        assert_eq!(drm_video_memory(&drm, 0x10de, 0x2684), None, "a malformed size");
+        assert_eq!(drm_video_memory(&drm, 0xdead, 0xbeef), None, "no such card");
+        assert_eq!(drm_video_memory(&drm.join("missing"), 0x1002, 0x73bf), None, "no drm folder");
+        std::fs::remove_dir_all(&drm).unwrap();
     }
 
     /// Windows used to report no RAM at all, so the budget assumed 16 GB on every machine.
