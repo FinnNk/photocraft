@@ -922,13 +922,16 @@ impl PcraftWriter {
         // Unix cleanup then stays within these directories even if a pathname is swapped.
         let gc = BundleGc::new(dir)?;
         // A preview the new manifest doesn't name must be gone before it commits, so a committed
-        // manifest never sits beside a stale preview; a failure here fails the save.
+        // manifest never sits beside a stale preview; a failure here fails the save. A removed
+        // composite's folder is flushed too, or a crash could bring it back beside the new
+        // manifest (the thumbnail's, the bundle root, is flushed with the manifest).
         for stale in [THUMB, COMPOSITE] {
             if !p.previews.iter().any(|(n, _)| *n == stale) {
                 let path = dir.join(stale);
                 validate_bundle_file(dir, &path)?;
                 match remove_bundle_file(dir, &path, &gc) {
                     Err(FormatError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Ok(()) if stale == COMPOSITE => confirm_flushed(&dir.join("composite"), &path)?,
                     other => other?,
                 }
             }
@@ -1089,6 +1092,35 @@ fn a_retried_save_flushes_the_folder_of_a_reused_object() {
     let manifest = flushed.iter().rposition(|d| *d == dir);
     assert!(tiles.is_some() && tiles < manifest, "tiles flushed before the manifest: {flushed:?}");
     assert_eq!(crate::load_path(&dir).unwrap(), doc);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A stale composite preview's removal is flushed before the new manifest commits, so a crash
+/// can't bring it back beside that manifest.
+#[cfg(test)]
+#[test]
+fn a_removed_stale_composite_is_flushed_before_the_manifest() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!("pcraft-composite-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = std::fs::canonicalize(dir).unwrap();
+    let doc = Document::new("composite", photocraft_doc::Size::new(8, 8), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let mut w = PcraftWriter::new();
+    w.save_dir(&doc, &dir, &SaveOptions { thumbnail: None, composite: Some(Rgba8Image::new(4, 3)) }).unwrap();
+    assert!(dir.join(COMPOSITE).exists());
+    FLUSHED.with(|f| f.borrow_mut().clear());
+    w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    assert!(!dir.join(COMPOSITE).exists());
+    let flushed = FLUSHED.with(|f| f.borrow().clone());
+    let composite = flushed.iter().position(|d| *d == dir.join("composite"));
+    let manifest = flushed.iter().rposition(|d| *d == dir);
+    assert!(composite.is_some() && composite < manifest, "composite flushed before the manifest: {flushed:?}");
+    // With no stale composite to remove, its folder isn't flushed.
+    FLUSHED.with(|f| f.borrow_mut().clear());
+    w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    assert!(FLUSHED.with(|f| f.borrow().iter().all(|d| *d != dir.join("composite"))));
     std::fs::remove_dir_all(dir).unwrap();
 }
 
