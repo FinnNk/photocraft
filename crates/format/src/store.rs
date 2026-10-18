@@ -921,6 +921,18 @@ impl PcraftWriter {
         // Pin all GC directories before removing stale previews or objects.
         // Unix cleanup then stays within these directories even if a pathname is swapped.
         let gc = BundleGc::new(dir)?;
+        // A preview the new manifest doesn't name must be gone before it commits, so a committed
+        // manifest never sits beside a stale preview; a failure here fails the save.
+        for stale in [THUMB, COMPOSITE] {
+            if !p.previews.iter().any(|(n, _)| *n == stale) {
+                let path = dir.join(stale);
+                validate_bundle_file(dir, &path)?;
+                match remove_bundle_file(dir, &path, &gc) {
+                    Err(FormatError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    other => other?,
+                }
+            }
+        }
         // An object this save reuses may come from a save whose own folder flush failed, so its
         // entry isn't confirmed yet: flush both object folders once before the manifest names
         // their contents.
@@ -931,15 +943,9 @@ impl PcraftWriter {
             }
         }
         write_bundle_file(dir, &dir.join(MANIFEST), &p.manifest)?;
-        // The manifest is committed: the save has succeeded. Removing previews and objects it no
-        // longer references is best-effort housekeeping (a vanished or locked file must not turn a
-        // complete save into a reported failure); a leftover is retried on the next save. Previews
-        // go only now too: if the manifest can't be committed, the previous one still names them.
-        for stale in [THUMB, COMPOSITE] {
-            if !p.previews.iter().any(|(n, _)| *n == stale) {
-                let _ = remove_bundle_file(dir, &dir.join(stale), &gc);
-            }
-        }
+        // The manifest is committed: the save has succeeded. Removing objects it no longer
+        // references is best-effort housekeeping (a vanished or locked file must not turn a
+        // complete save into a reported failure); a leftover is retried on the next save.
         for path in existing {
             if !p.objects.contains_key(&path) {
                 if remove_bundle_file(dir, &dir.join(&path), &gc).is_ok() {
@@ -1020,9 +1026,8 @@ fn gc_pinned_directory_handles_resist_subdirectory_swap() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// #4968: a manifest whose folder can't be flushed fails the save, and the objects and previews the
-/// previous manifest references stay in place; the next save that flushes removes what is
-/// unreferenced.
+/// #4968: a manifest whose folder can't be flushed fails the save, and the objects the previous
+/// manifest references stay in place; the next save that flushes removes what is unreferenced.
 #[cfg(test)]
 #[test]
 fn a_failed_manifest_flush_keeps_the_previous_objects() {
@@ -1039,10 +1044,7 @@ fn a_failed_manifest_flush_keeps_the_previous_objects() {
     };
     paint(&mut doc, 1.0);
     let mut w = PcraftWriter::new();
-    // The first save has a thumbnail; the next ones drop it.
-    let thumb = SaveOptions { thumbnail: Some(Rgba8Image::new(4, 3)), composite: None };
-    w.save_dir(&doc, &dir, &thumb).unwrap();
-    assert!(dir.join(THUMB).exists());
+    w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     let old = list_objects(&dir).unwrap();
     paint(&mut doc, 0.0);
     FAIL_DIR_FLUSH.with(|f| f.set(Some(MANIFEST)));
@@ -1051,10 +1053,8 @@ fn a_failed_manifest_flush_keeps_the_previous_objects() {
     let now = list_objects(&dir).unwrap();
     assert!(old.is_subset(&now), "the previous manifest's objects are kept");
     assert!(now.len() > old.len(), "the new objects were written");
-    assert!(dir.join(THUMB).exists(), "the previous manifest's thumbnail is kept");
     let stats = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     assert!(stats.objects_removed > 0, "the next save removes the unreferenced objects");
-    assert!(!dir.join(THUMB).exists(), "and the thumbnail it no longer names");
     assert_eq!(crate::load_path(&dir).unwrap(), doc);
     std::fs::remove_dir_all(dir).unwrap();
 }
