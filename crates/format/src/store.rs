@@ -530,23 +530,40 @@ fn validate_bundle_file(root: &Path, path: &Path) -> Result<()> {
 fn flush_bundle_dir(dir: &Path, written: &Path) -> std::io::Result<()> {
     use crate::atomic::AtomicFs;
     #[cfg(test)]
-    if FAIL_DIR_FLUSH.with(|f| {
-        let hit = f.get().is_some_and(|name| written.file_name().is_some_and(|n| n == name));
-        if hit {
-            f.set(None);
+    {
+        FLUSHED.with(|f| f.borrow_mut().push(dir.to_path_buf()));
+        let named = |p: Option<&Path>, name: &str| p.and_then(Path::file_name).is_some_and(|n| n == name);
+        if FAIL_DIR_FLUSH.with(|f| {
+            let hit = f.get().is_some_and(|name| named(Some(written), name) || named(written.parent(), name));
+            if hit {
+                f.set(None);
+            }
+            hit
+        }) {
+            return Err(std::io::Error::other("injected folder flush failure"));
         }
-        hit
-    }) {
-        return Err(std::io::Error::other("injected folder flush failure"));
     }
     let _ = written;
     crate::atomic::RealFs.sync_dir(dir)
 }
 
+/// [`flush_bundle_dir`], as the save's error when the flush was attempted and failed: `written`
+/// is in place, but may not survive a power loss or crash (#4968).
+fn confirm_flushed(dir: &Path, written: &Path) -> Result<()> {
+    crate::atomic::dir_synced(flush_bundle_dir(dir, written)).map_err(|e| {
+        FormatError::Io(std::io::Error::new(
+            e.kind(),
+            format!("{} was written, but its folder could not be flushed to disk, so the save may not survive a power loss or crash: {e}", written.display()),
+        ))
+    })
+}
+
 #[cfg(test)]
 thread_local! {
-    /// Tests: the bundle file whose folder flush fails, once, on this thread.
+    /// Tests: the bundle file, or folder, whose next folder flush fails, once, on this thread.
     static FAIL_DIR_FLUSH: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+    /// Tests: the folders flushed on this thread, in order.
+    static FLUSHED: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn write_bundle_file(root: &Path, path: &Path, data: &[u8]) -> Result<()> {
@@ -588,12 +605,7 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8]) -> Result<()> {
         crate::atomic::retry_rename(crate::atomic::RenameRetry::platform(), || std::fs::rename(&tmp, path))?;
         // As in `atomic_write`: a failed directory flush is reported (#4968), so a manifest
         // that may not survive a power loss isn't followed by removing what the old one needs.
-        crate::atomic::dir_synced(flush_bundle_dir(parent, path)).map_err(|e| {
-            FormatError::Io(std::io::Error::new(
-                e.kind(),
-                format!("{} was written, but its folder could not be flushed to disk, so the save may not survive a power loss or crash: {e}", path.display()),
-            ))
-        })?;
+        confirm_flushed(parent, path)?;
         Ok(())
     })();
     if result.is_err() && validate_bundle_file(root, &tmp).is_ok() {
@@ -909,6 +921,15 @@ impl PcraftWriter {
         // Pin all GC directories before removing stale previews or objects.
         // Unix cleanup then stays within these directories even if a pathname is swapped.
         let gc = BundleGc::new(dir)?;
+        // An object this save reuses may come from a save whose own folder flush failed, so its
+        // entry isn't confirmed yet: flush both object folders once before the manifest names
+        // their contents.
+        for sub in ["tiles", "blobs"] {
+            let folder = dir.join(sub);
+            if folder.is_dir() {
+                confirm_flushed(&folder, &folder)?;
+            }
+        }
         write_bundle_file(dir, &dir.join(MANIFEST), &p.manifest)?;
         // The manifest is committed: the save has succeeded. Removing previews and objects it no
         // longer references is best-effort housekeeping (a vanished or locked file must not turn a
@@ -1034,6 +1055,39 @@ fn a_failed_manifest_flush_keeps_the_previous_objects() {
     let stats = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     assert!(stats.objects_removed > 0, "the next save removes the unreferenced objects");
     assert!(!dir.join(THUMB).exists(), "and the thumbnail it no longer names");
+    assert_eq!(crate::load_path(&dir).unwrap(), doc);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An object whose folder flush failed is reused by the retried save, which writes no new object
+/// there: that save still flushes the object folder before committing a manifest that names it.
+#[cfg(test)]
+#[test]
+fn a_retried_save_flushes_the_folder_of_a_reused_object() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!("pcraft-retry-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = std::fs::canonicalize(dir).unwrap();
+    // One layer of one tile: the retry finds its only object already written.
+    let mut doc = Document::new("retry", photocraft_doc::Size::new(16, 16), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let id = doc.insert_above(None, photocraft_doc::Layer::raster("paint", doc.pixel_format()));
+    doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 16, 16), &[1.0, 0.5, 0.25, 1.0]);
+    let mut w = PcraftWriter::new();
+    FAIL_DIR_FLUSH.with(|f| f.set(Some("tiles")));
+    let e = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap_err();
+    assert!(e.to_string().contains("could not be flushed"), "{e}");
+    assert!(!dir.join(MANIFEST).exists(), "nothing committed");
+    let written = list_objects(&dir).unwrap();
+    assert_eq!(written.iter().filter(|o| o.starts_with("tiles/")).count(), 1, "{written:?}");
+    FLUSHED.with(|f| f.borrow_mut().clear());
+    let stats = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    assert_eq!(stats.tiles_written, 0, "the tile is reused");
+    let flushed = FLUSHED.with(|f| f.borrow().clone());
+    let tiles = flushed.iter().position(|d| *d == dir.join("tiles"));
+    let manifest = flushed.iter().rposition(|d| *d == dir);
+    assert!(tiles.is_some() && tiles < manifest, "tiles flushed before the manifest: {flushed:?}");
     assert_eq!(crate::load_path(&dir).unwrap(), doc);
     std::fs::remove_dir_all(dir).unwrap();
 }
