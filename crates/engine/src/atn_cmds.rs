@@ -1661,7 +1661,20 @@ fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
         "layer.setAdjustment" => {
             // The adjustment kind isn't in the params: Photoshop needs it, so only steps that
             // name one (`kind`) export.
-            let a = adjustment_by_suffix(jstr(p, "kind")?)?;
+            let kind = jstr(p, "kind")?;
+            // `layer.setAdjustment` changes only the settings it names. Color Balance and
+            // Hue/Saturation descriptors carry every setting, filling absent ones with defaults,
+            // so a partial edit would replay as one that also resets the rest (#8531).
+            let given = |keys: &[&str]| keys.iter().all(|k| p.get(*k).is_some_and(|v| !v.is_null()));
+            let complete = match kind {
+                "colorBalance" => given(&["shadows", "midtones", "highlights", "preserveLuminosity"]),
+                "hueSaturation" => given(&["colorize", "hue", "saturation", "lightness"]),
+                _ => true,
+            };
+            if !complete {
+                return None;
+            }
+            let a = adjustment_by_suffix(kind)?;
             desc("null").with("null", target_ref("AdjL")).with("T   ", D::Descriptor((a.to)(p)?))
         }
         _ => return None,

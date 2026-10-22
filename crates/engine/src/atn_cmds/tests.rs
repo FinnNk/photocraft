@@ -2053,6 +2053,34 @@ fn options_the_descriptors_cannot_carry_refuse_strict_export() {
     }
 }
 
+/// #8531: a partial `layer.setAdjustment` of Color Balance or Hue/Saturation can't be written
+/// (their descriptors carry every setting, filling absent ones with defaults), so strict export
+/// refuses it instead of replaying an edit that also resets the rest. Complete ones still export.
+#[test]
+fn partial_color_balance_and_hue_saturation_edits_refuse_strict_export() {
+    let one = |p: Value| Action { name: "Probe".into(), steps: vec![("layer.setAdjustment".into(), p)], ..Default::default() };
+    for p in [
+        json!({"kind": "colorBalance", "shadows": [32, -24, 16]}),
+        json!({"kind": "colorBalance", "preserveLuminosity": true}),
+        json!({"kind": "hueSaturation", "hue": 20}),
+        json!({"kind": "hueSaturation", "reds": {"hue": 10}}),
+    ] {
+        let err = export("Audit8", &[&one(p.clone())], &[], false).unwrap_err();
+        assert!(err.contains("`layer.setAdjustment`"), "{p}: {err}");
+        let (_, skipped) = export("Audit8", &[&one(p.clone())], &[], true).unwrap();
+        assert_eq!(skipped, vec![Skipped { action: "Probe".into(), step: 0, id: "layer.setAdjustment".into() }], "{p}");
+    }
+    let full = json!({"kind": "colorBalance", "shadows": [32, -24, 16], "midtones": [-17, 27, -31], "highlights": [11, -19, 23], "preserveLuminosity": false});
+    let (bytes, _) = export("Audit8", &[&one(full)], &[], false).unwrap();
+    let steps = import(&bytes).unwrap().actions[0].steps.clone();
+    let (id, p) = steps.first().unwrap();
+    assert_eq!(id, "layer.setAdjustment");
+    assert_eq!(p.get("midtones"), Some(&json!([-17, 27, -31])), "{p}");
+    assert_eq!(p.get("preserveLuminosity"), Some(&json!(false)), "{p}");
+    let hue = json!({"kind": "hueSaturation", "colorize": false, "hue": 20, "saturation": -5, "lightness": 0});
+    assert!(export("Audit8", &[&one(hue)], &[], false).is_ok());
+}
+
 /// Photoshop's Close has no document target: a Close of a specific document must not be
 /// exported as a plain Close, which would close the active document on playback.
 #[test]
