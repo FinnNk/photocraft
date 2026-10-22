@@ -2085,6 +2085,8 @@ fn partial_color_balance_and_hue_saturation_edits_refuse_strict_export() {
     let range =
         json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 10, "saturation": 5, "lightness": -5}});
     assert!(export("Audit8", &[&one(range)], &[], false).is_ok());
+    let bounded = json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 10, "saturation": 5, "lightness": -5, "range": [315, 345, 15, 45]}});
+    assert!(export("Audit8", &[&one(bounded)], &[], false).is_ok());
     // Values of the wrong shape would be written as 0: refused too.
     for bad in [
         json!({"kind": "colorBalance", "shadows": "invalid", "midtones": [0, 0, 0], "highlights": [0, 0, 0], "preserveLuminosity": true}),
@@ -2092,6 +2094,8 @@ fn partial_color_balance_and_hue_saturation_edits_refuse_strict_export() {
         json!({"kind": "colorBalance", "shadows": [0, 0, 0], "midtones": [0, 0, 0], "highlights": [0, 0, 0], "preserveLuminosity": "yes"}),
         json!({"kind": "hueSaturation", "colorize": false, "hue": "20", "saturation": 0, "lightness": 0}),
         json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": 5}),
+        json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 1, "saturation": 0, "lightness": 0, "range": [0, 20, 40]}}),
+        json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 1, "saturation": 0, "lightness": 0, "range": "invalid"}}),
     ] {
         assert!(export("Audit8", &[&one(bad.clone())], &[], false).is_err(), "{bad}");
     }
