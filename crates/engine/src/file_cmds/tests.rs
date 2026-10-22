@@ -1273,9 +1273,9 @@ fn guide_layouts_take_units() {
     )
     .unwrap();
     let g = &doc(&s).guides;
-    let has = |v: &[f64], x: f64| v.iter().any(|y| (y - x).abs() < 0.01);
-    assert!([235.0, 305.0].iter().all(|x| has(&g.vertical, *x)), "{:?}", g.vertical);
-    assert!([110.0, 130.0].iter().all(|y| has(&g.horizontal, *y)), "{:?}", g.horizontal);
+    // Clear Existing removes guides inside the board only; those outside it stay.
+    assert!(close(&g.vertical, &[0.0, 1200.0, 450.0, 750.0, 235.0, 305.0]), "{:?}", g.vertical);
+    assert!(close(&g.horizontal, &[60.0, 540.0, 225.0, 375.0, 110.0, 130.0]), "{:?}", g.horizontal);
     for bad in [
         json!({"columns": 2, "gutter": "1 furlong"}),
         json!({"columns": 2, "gutter": "-1 cm"}),
