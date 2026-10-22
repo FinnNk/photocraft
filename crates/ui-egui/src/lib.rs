@@ -2346,7 +2346,6 @@ impl eframe::App for PhotocraftApp {
         if let Some(menu) = self.services.native_menu.as_mut() {
             menu.raw_input(raw_input);
         }
-        widgets::cap_text_events(&mut raw_input.events);
         shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
         // Windows precision touchpads and some Linux Wayland compositors send pinches
         // as fractional Ctrl + wheel rather than a native Zoom event (#4566).
@@ -2355,6 +2354,8 @@ impl eframe::App for PhotocraftApp {
             wheel_nav::fold_legacy_pinch(ctx, raw_input);
         }
         raw_input.events.extend(self.take_synthetic_step());
+        // After the control channel's own events (`ui.type`) join the OS's, before any widget.
+        widgets::cap_text_events(&mut raw_input.events);
         self.control_click.normalize(&mut raw_input.events, cfg!(target_os = "macos"));
         // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
         let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);

@@ -877,16 +877,25 @@ pub fn text_field_ex(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, w
     }
     let font = if mono { theme::mono(12.0) } else { egui::FontId::proportional(12.5) };
     let inner = rect.shrink2(TEXT_FIELD_PAD);
+    let limit = char_limit.unwrap_or(TEXT_FIELD_LIMIT);
+    // A value already past the limit (restored from a state file, set by automation) is shown and
+    // edited as its first `limit` characters, so it is never laid out whole; the caller's string
+    // changes only when that copy is edited.
+    let mut bounded = text.char_indices().nth(limit).map(|(end, _)| text[..end].to_string());
+    let shown = match bounded.as_mut() {
+        Some(b) => b,
+        None => &mut *text,
+    };
     // TextEdit draws its text at the top of its rect; fill the box and centre the line in it, so
     // the text sits on the field's middle like a dropdown's or value field's.
-    let edit = egui::TextEdit::singleline(text)
+    let edit = egui::TextEdit::singleline(shown)
         .id(id)
         .hint_text(hint)
         .frame(egui::Frame::NONE)
         .font(font)
         .min_size(inner.size())
         .vertical_align(egui::Align::Center)
-        .char_limit(char_limit.unwrap_or(TEXT_FIELD_LIMIT));
+        .char_limit(limit);
     // A child Ui keeps the field's selection colour local: `Visuals::selection` also fills selected
     // list rows and slider trails, which must keep the theme's.
     let layout = egui::Layout::centered_and_justified(egui::Direction::TopDown);
@@ -894,7 +903,13 @@ pub fn text_field_ex(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, w
     // The theme's 24 pt interact height would make the edit taller than the box's inside.
     child.spacing_mut().interact_size.y = inner.height();
     child.style_mut().visuals.selection.bg_fill = t.field_selection();
-    child.add(edit)
+    let response = child.add(edit);
+    if let Some(b) = bounded
+        && response.changed()
+    {
+        *text = b;
+    }
+    response
 }
 
 fn first_field_id() -> egui::Id {
@@ -2280,6 +2295,24 @@ mod tests {
         h.event(egui::Event::Paste("9".repeat(10)));
         h.run_steps(1);
         assert_eq!(h.state().chars().count(), super::TEXT_FIELD_LIMIT);
+    }
+
+    /// #2150: a value already past the limit is laid out only up to it, and stays the caller's
+    /// until the field is edited, which keeps the bounded copy.
+    #[test]
+    fn text_field_bounds_an_oversized_existing_value() {
+        use egui::accesskit::Role;
+        let long = "9".repeat(super::TEXT_FIELD_LIMIT * 4);
+        let mut h = Harness::new_ui_state(|ui, s: &mut String| drop(super::text_field(ui, egui::Id::new("tf"), s, "", 140.0, false)), long.clone());
+        crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run();
+        assert_eq!(*h.state(), long, "drawing alone leaves the caller's value alone");
+        assert_eq!(h.get_by_role(Role::TextInput).value().map(|v| v.chars().count()), Some(super::TEXT_FIELD_LIMIT));
+        h.get_by_role(Role::TextInput).click();
+        h.run_steps(1);
+        h.event(egui::Event::Key { key: egui::Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        assert!(h.state().chars().count() < super::TEXT_FIELD_LIMIT, "an edit keeps the bounded copy");
     }
 
     /// #2150: every text-carrying event is cut to the app-wide limit at a character boundary
