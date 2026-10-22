@@ -1677,10 +1677,14 @@ fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
                 "hueSaturation" => {
                     flag("colorize")
                         && numbers(p, &["hue", "saturation", "lightness"])
-                        && HUE_RANGES
-                            .iter()
-                            .filter_map(|r| p.get(*r).filter(|v| !v.is_null()))
-                            .all(|r| r.is_object() && numbers(r, &["hue", "saturation", "lightness"]))
+                        && HUE_RANGES.iter().filter_map(|r| p.get(*r).filter(|v| !v.is_null())).all(|r| {
+                            // Bounds, when given, are the four numbers `hue_entry` writes; otherwise it drops them.
+                            let bounds = r
+                                .get("range")
+                                .filter(|v| !v.is_null())
+                                .is_none_or(|v| v.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(|b| b.as_f64().is_some_and(f64::is_finite))));
+                            r.is_object() && numbers(r, &["hue", "saturation", "lightness"]) && bounds
+                        })
                 }
                 _ => true,
             };
