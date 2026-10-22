@@ -2085,6 +2085,16 @@ fn partial_color_balance_and_hue_saturation_edits_refuse_strict_export() {
     let range =
         json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 10, "saturation": 5, "lightness": -5}});
     assert!(export("Audit8", &[&one(range)], &[], false).is_ok());
+    // Values of the wrong shape would be written as 0: refused too.
+    for bad in [
+        json!({"kind": "colorBalance", "shadows": "invalid", "midtones": [0, 0, 0], "highlights": [0, 0, 0], "preserveLuminosity": true}),
+        json!({"kind": "colorBalance", "shadows": [1, 2], "midtones": [0, 0, 0], "highlights": [0, 0, 0], "preserveLuminosity": true}),
+        json!({"kind": "colorBalance", "shadows": [0, 0, 0], "midtones": [0, 0, 0], "highlights": [0, 0, 0], "preserveLuminosity": "yes"}),
+        json!({"kind": "hueSaturation", "colorize": false, "hue": "20", "saturation": 0, "lightness": 0}),
+        json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": 5}),
+    ] {
+        assert!(export("Audit8", &[&one(bad.clone())], &[], false).is_err(), "{bad}");
+    }
 }
 
 /// Photoshop's Close has no document target: a Close of a specific document must not be

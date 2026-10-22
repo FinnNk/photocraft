@@ -1665,13 +1665,22 @@ fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
             // `layer.setAdjustment` changes only the settings it names. Color Balance and
             // Hue/Saturation descriptors carry every setting, filling absent ones with defaults,
             // so a partial edit would replay as one that also resets the rest (#8531).
-            let given = |p: &Value, keys: &[&str]| keys.iter().all(|k| p.get(*k).is_some_and(|v| !v.is_null()));
+            // Present and of the shape the writer reads: anything else it would write as 0.
+            let number = |p: &Value, k: &str| p.get(k).and_then(Value::as_f64).is_some_and(f64::is_finite);
+            let numbers = |p: &Value, keys: &[&str]| keys.iter().all(|k| number(p, k));
+            let flag = |k: &str| p.get(k).is_some_and(Value::is_boolean);
+            let triplet =
+                |k: &str| p.get(k).and_then(Value::as_array).is_some_and(|a| a.len() == 3 && a.iter().all(|v| v.as_f64().is_some_and(f64::is_finite)));
             let complete = match kind {
-                "colorBalance" => given(p, &["shadows", "midtones", "highlights", "preserveLuminosity"]),
+                "colorBalance" => ["shadows", "midtones", "highlights"].iter().all(|k| triplet(k)) && flag("preserveLuminosity"),
                 // Every colour range written carries its own hue, saturation and lightness too.
                 "hueSaturation" => {
-                    given(p, &["colorize", "hue", "saturation", "lightness"])
-                        && HUE_RANGES.iter().filter_map(|r| p.get(*r).filter(|v| v.is_object())).all(|r| given(r, &["hue", "saturation", "lightness"]))
+                    flag("colorize")
+                        && numbers(p, &["hue", "saturation", "lightness"])
+                        && HUE_RANGES
+                            .iter()
+                            .filter_map(|r| p.get(*r).filter(|v| !v.is_null()))
+                            .all(|r| r.is_object() && numbers(r, &["hue", "saturation", "lightness"]))
                 }
                 _ => true,
             };
