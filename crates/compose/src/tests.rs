@@ -805,6 +805,93 @@ fn clipped_adjustment_in_pass_through_clip_base_reaches_its_group() {
     assert_eq!(change_bounds_in(&g.children, 1, Some((&d.layers, 2)), canvas), Some(Rect::new(2, 1, 4, 3)));
 }
 
+/// The pixels that differ between `d` rendered as it is and with `toggle` applied.
+fn toggled_pixels(d: &Document, canvas: Rect, toggle: impl FnOnce(&mut Document)) -> Rect {
+    let shown = render(d, canvas);
+    let mut d = d.clone();
+    toggle(&mut d);
+    let hidden = render(&d, canvas);
+    let w = canvas.width() as usize;
+    let mut changed = Rect::EMPTY;
+    for (i, (a, b)) in shown.px.iter().zip(&hidden.px).enumerate() {
+        if !close4(*a, *b) {
+            let p = Rect::from_xywh(canvas.x0 + (i % w) as i32, canvas.y0 + (i / w) as i32, 1, 1);
+            changed = if changed.is_empty() { p } else { changed.union(&p) };
+        }
+    }
+    changed
+}
+
+/// #6533: an adjustment layer whose mask hides everything outside its painted area changes only
+/// that area, so showing or hiding it (or a pass-through group of such ones) is a bounded
+/// redraw rather than the whole document.
+#[test]
+fn masked_adjustment_changes_only_its_mask_area() {
+    let canvas = Rect::new(0, 0, 10, 8);
+    let painted = Rect::new(2, 1, 5, 4);
+    let masked = |name: &str| {
+        let mut adj = Layer::new(name, LayerContent::Adjustment(Adjustment::Invert));
+        let mut m = LayerMask::hide_all();
+        m.surface.fill_rect(painted, &[1.0]);
+        adj.mask = Some(m);
+        adj
+    };
+    let mut d = doc_white(10, 8);
+    d.layers.push(solid_layer("px", Rect::new(6, 5, 9, 7), [0.2, 0.4, 0.6, 1.0]));
+    d.layers.push(masked("inv"));
+    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas), Some(painted));
+    assert_eq!(toggled_pixels(&d, canvas, |d| d.layers[2].visible = false), painted);
+    // The plain per-layer bounds (used by the move and blend previews) are unchanged.
+    assert_eq!(change_bounds(&d.layers[2], canvas), None);
+
+    // A pass-through group: its pixels plus its adjustments' masks.
+    let px_rect = Rect::new(6, 5, 9, 7);
+    let mut g = Layer::group("g", vec![solid_layer("in", px_rect, [0.2, 0.4, 0.6, 1.0]), masked("inv")]);
+    g.blend = BlendMode::PassThrough;
+    let mut d2 = doc_white(10, 8);
+    d2.layers.push(g);
+    let both = painted.union(&px_rect);
+    assert_eq!(change_bounds_in(&d2.layers, 1, None, canvas), Some(both));
+    assert!(both.contains_rect(&toggled_pixels(&d2, canvas, |d| d.layers[1].visible = false)));
+    let LayerContent::Group(inner) = &d2.layers[1].content else { panic!("group") };
+    assert_eq!(change_bounds_in(&inner.children, 1, Some((&d2.layers, 1)), canvas), Some(painted));
+
+    // Masks that can reach outside the painted area keep the whole-document damage.
+    let unbounded = |edit: &dyn Fn(&mut LayerMask)| {
+        let mut layers = d.layers.clone();
+        if let Some(m) = layers[2].mask.as_mut() {
+            edit(m);
+        }
+        change_bounds_in(&layers, 2, None, canvas)
+    };
+    assert_eq!(unbounded(&|m| m.enabled = false), None);
+    assert_eq!(unbounded(&|m| m.density = 0.5), None);
+    assert_eq!(unbounded(&|m| m.density = f32::NAN), None);
+    assert_eq!(unbounded(&|m| m.feather = 4.0), None);
+    assert_eq!(unbounded(&|m| *m = LayerMask::reveal_all()), None);
+    let mut no_mask = d.layers.clone();
+    no_mask[2].mask = None;
+    assert_eq!(change_bounds_in(&no_mask, 2, None, canvas), None);
+    // A clip base: the layers clipped to it composite everywhere atop the adjusted backdrop.
+    let mut base = d.layers.clone();
+    let mut over = solid_layer("over", Rect::new(0, 0, 1, 1), [1.0, 0.0, 0.0, 1.0]);
+    over.clipped = true;
+    base.push(over);
+    assert_eq!(change_bounds_in(&base, 2, None, canvas), None);
+    // In a pass-through group that is a clip base, which isolates while it holds an adjustment.
+    let mut clip_base = d2.layers.clone();
+    let mut x = solid_layer("x", Rect::new(0, 0, 1, 1), [1.0, 0.0, 0.0, 1.0]);
+    x.clipped = true;
+    clip_base.push(x);
+    let LayerContent::Group(inner) = &clip_base[1].content else { panic!("group") };
+    assert_eq!(change_bounds_in(&inner.children, 1, Some((&clip_base, 1)), canvas), None);
+    // A group holding an unmasked adjustment still reaches everything.
+    let mut open = d2.layers.clone();
+    let LayerContent::Group(inner) = &mut open[1].content else { panic!("group") };
+    inner.children.push(Layer::new("free", LayerContent::Adjustment(Adjustment::Invert)));
+    assert_eq!(change_bounds_in(&open, 1, None, canvas), None);
+}
+
 #[test]
 fn threshold_posterize_levels_curves() {
     let mut buf = Buffer::filled(Rect::new(0, 0, 1, 1), [0.3, 0.3, 0.3, 1.0]);

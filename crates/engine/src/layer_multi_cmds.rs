@@ -2072,6 +2072,35 @@ mod tests {
         }
     }
 
+    /// #6533: hiding or showing an adjustment layer masked to a selection (and undoing it)
+    /// damages only the mask's painted area, not the whole canvas, and every pixel the toggle
+    /// changes lies inside it.
+    #[test]
+    fn toggling_a_masked_adjustment_damages_only_its_mask_area() {
+        let mut s = session(16);
+        rect_layer(&mut s, Rect::new(0, 0, 100, 80));
+        let adj = LayerId(s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap());
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 15})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({"layer": adj.0})).unwrap();
+        let area = Rect::new(10, 10, 30, 25);
+        let all = |s: &Session| photocraft_compose::render(doc(s), doc(s).bounds());
+        let shown = all(&s);
+        s.execute("layer.hideLayers", json!({"layer": adj.0})).unwrap();
+        assert_eq!(damage(&s), Some(area));
+        let hidden = all(&s);
+        let w = shown.rect.width() as usize;
+        let outside = shown.px.iter().zip(&hidden.px).enumerate().filter(|(i, (a, b))| a != b && !area.contains((i % w) as i32, (i / w) as i32)).count();
+        assert_eq!(outside, 0, "pixels changed outside the mask");
+        assert_ne!(shown, hidden);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(damage(&s), Some(area));
+        s.execute("layer.showLayers", json!({"layer": adj.0})).unwrap();
+        // Revealing everything makes it reach the whole canvas again.
+        s.execute("layer.layerMask.revealAll", json!({"layer": adj.0})).unwrap();
+        s.execute("layer.hideLayers", json!({"layer": adj.0})).unwrap();
+        assert_eq!(damage(&s), None);
+    }
+
     /// #6535: hiding a clipped adjustment inside a pass-through group that is itself a clip base
     /// can switch the group between isolated and pass-through rendering, so the step damages the
     /// whole group, on undo, redo and when the adjustment is deleted too.
