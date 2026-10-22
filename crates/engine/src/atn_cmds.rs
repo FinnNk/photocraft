@@ -3037,6 +3037,110 @@ macro_rules! adjustment_event {
 
 const RIPPLE_SIZE: &[(&str, &str)] = &[("Sml", "small"), ("Mdm", "medium"), ("Lrg", "large")];
 
+/// Camera Raw Filter's scalar sliders. Every one is an integer in recorded steps except `Ex12`
+/// and `ShpR` (doubles); the layout is from 62 recorded steps in 14 sets (#6745) and matches the
+/// verified PSD Smart Filter mapping (`photocraft-io`'s `camera_raw_map.rs`).
+const CAMERA_RAW: &[F] = &[
+    F("Temp", "temperature", Kind::Long),
+    F("Tint", "tint", Kind::Long),
+    F("Ex12", "exposure", Kind::Dbl),
+    F("Cr12", "contrast", Kind::Long),
+    F("Hi12", "highlights", Kind::Long),
+    F("Sh12", "shadows", Kind::Long),
+    F("Wh12", "whites", Kind::Long),
+    F("Bk12", "blacks", Kind::Long),
+    F("CrTx", "texture", Kind::Long),
+    F("Cl12", "clarity", Kind::Long),
+    F("Dhze", "dehaze", Kind::Long),
+    F("Vibr", "vibrance", Kind::Long),
+    F("Strt", "saturation", Kind::Long),
+    F("PC_H", "curveHighlights", Kind::Long),
+    F("PC_L", "curveLights", Kind::Long),
+    F("PC_D", "curveDarks", Kind::Long),
+    F("PC_S", "curveShadows", Kind::Long),
+    F("CgBl", "gradeBlending", Kind::Long),
+    F("STB ", "gradeBalance", Kind::Long),
+    F("Shrp", "sharpenAmount", Kind::Long),
+    F("ShpR", "sharpenRadius", Kind::Dbl),
+    F("ShpD", "sharpenDetail", Kind::Long),
+    F("ShpM", "sharpenMasking", Kind::Long),
+    F("LNR ", "noiseLuminance", Kind::Long),
+    F("LNRD", "noiseLuminanceDetail", Kind::Long),
+    F("CNR ", "noiseColor", Kind::Long),
+    F("CNRD", "noiseColorDetail", Kind::Long),
+    F("GRNA", "grainAmount", Kind::Long),
+    F("GRNS", "grainSize", Kind::Long),
+    F("GRNF", "grainRoughness", Kind::Long),
+    F("PCVA", "vignetteAmount", Kind::Long),
+    F("PCVM", "vignetteMidpoint", Kind::Long),
+    F("PCVR", "vignetteRoundness", Kind::Long),
+    F("PCVF", "vignetteFeather", Kind::Long),
+    F("PCVH", "vignetteHighlights", Kind::Long),
+];
+
+/// A recorded Camera Raw Filter step (`Adobe Camera Raw Filter`) as `filter.cameraRaw` (#6745).
+/// Settings the command has no counterpart for refuse the step rather than replaying a different
+/// look: the Calibration panel, a white balance other than Custom, and the controls the PSD
+/// mapping keeps only at their neutral values. Version metadata and a full settings snapshot's
+/// lens and geometry keys are ignored, as other events ignore keys they don't map.
+fn camera_raw_from(d: &Descriptor) -> Mapped {
+    const CALIBRATION: &[&str] = &["RHue", "RSat", "GHue", "GSat", "BHue", "BSat", "BlkB"];
+    const NEUTRAL_ONLY: &[(&str, f64)] =
+        &[("LNRC", 0.0), ("CNRS", 50.0), ("MDis", 0.0), ("VigA", 0.0), ("VigM", 50.0), ("crfs", 100.0), ("TMMs", 0.0), ("PGTM", 0.0), ("RGBt", 0.0)];
+    let active = |k: &str, neutral: f64| d.get(k).is_some() && get_num(d, k) != Some(neutral);
+    let custom_wb = d.get("WBal").is_none() || get_enum(d, "WBal").as_deref() == Some("Cst");
+    if !custom_wb || CALIBRATION.iter().any(|k| active(k, 0.0)) || NEUTRAL_ONLY.iter().any(|(k, n)| active(k, *n)) {
+        return Mapped::Unsupported { harmless: false };
+    }
+    let Some(mut m) = fields_from(d, CAMERA_RAW) else { return Mapped::Unsupported { harmless: false } };
+    let nums = |keys: &[&str]| -> Option<Vec<Value>> {
+        let v: Vec<Option<f64>> = keys.iter().map(|k| get_num(d, k)).collect();
+        // Absent members keep the command's defaults only when the whole group is absent.
+        if v.iter().all(Option::is_none) { None } else { Some(v.into_iter().map(|n| Value::from(n.unwrap_or(0.0))).collect()) }
+    };
+    if let (Some(a), Some(b), Some(c)) = (get_num(d, "PC_1"), get_num(d, "PC_2"), get_num(d, "PC_3")) {
+        m.insert("curveSplits".into(), json!([a, b, c]));
+    }
+    for (prefix, param) in [("HA_", "hslHue"), ("SA_", "hslSat"), ("LA_", "hslLum")] {
+        let keys: Vec<String> = ["R", "O", "Y", "G", "A", "B", "P", "M"].iter().map(|c| format!("{prefix}{c}")).collect();
+        if let Some(v) = nums(&keys.iter().map(String::as_str).collect::<Vec<_>>()) {
+            m.insert(param.into(), Value::Array(v));
+        }
+    }
+    for (keys, param) in [
+        (["STSH", "STSS", "CgSL"], "gradeShadows"),
+        (["CgMH", "CgMS", "CgML"], "gradeMidtones"),
+        (["STHH", "STHS", "CgHL"], "gradeHighlights"),
+        (["CgGH", "CgGS", "CgGL"], "gradeGlobal"),
+    ] {
+        if let Some(v) = nums(&keys) {
+            m.insert(param.into(), json!({"hue": v[0], "sat": v[1], "lum": v[2]}));
+        }
+    }
+    match get_num(d, "PCVS") {
+        None => {}
+        Some(n) => match [(1.0, "highlightPriority"), (2.0, "colorPriority"), (3.0, "paintOverlay")].iter().find(|(k, _)| *k == n) {
+            Some((_, style)) => {
+                m.insert("vignetteStyle".into(), json!(style));
+            }
+            None => return Mapped::Unsupported { harmless: false },
+        },
+    }
+    // Point curves: flat `[in0, out0, in1, out1, …]` lists on 0..255, as the command's pairs.
+    for (key, param) in [("Crv ", "pointCurve"), ("CrvR", "pointCurveRed"), ("CrvG", "pointCurveGreen"), ("CrvB", "pointCurveBlue")] {
+        let Some(list) = get_list(d, key) else { continue };
+        let Some(flat) = list.iter().map(num).collect::<Option<Vec<f64>>>() else { return Mapped::Unsupported { harmless: false } };
+        if flat.len() % 2 != 0 {
+            return Mapped::Unsupported { harmless: false };
+        }
+        let identity = flat == [0.0, 0.0, 255.0, 255.0];
+        if !identity {
+            m.insert(param.into(), Value::Array(flat.as_chunks::<2>().0.iter().map(|[a, b]| json!([a, b])).collect()));
+        }
+    }
+    step(crate::lens_cmds::RAW, Value::Object(m))
+}
+
 /// Whether a Select and Mask step carries Refine Edge Brush strokes, which no descriptor holds.
 fn has_refine_strokes(p: &Value) -> bool {
     p.get("refineStrokes").is_some_and(|v| !v.is_null() && v.as_array().is_none_or(|a| !a.is_empty()))
@@ -3328,6 +3432,9 @@ const EVENTS: &[Event] = &[
     ev!("Rple", "ripple", "Ripple", "filter.distort.ripple", &[F("Amnt", "amount", Kind::ExactLong), F("RplS", "size", Kind::Enum("RplS", RIPPLE_SIZE))]),
     ev!("Crst", "crystallize", "Crystallize", "filter.pixelate.crystallize", &[F("ClSz", "cellSize", Kind::ExactLong)]),
     Event { code: "GEfc", name: "filterGallery", label: "Filter Gallery", ids: GALLERY_IDS, from: gallery_from, to: gallery_to },
+    // Import only: what Photoshop needs in a written step (process version, the full settings
+    // set) is unverified, so Save Actions still refuses `filter.cameraRaw`.
+    Event { code: "", name: "Adobe Camera Raw Filter", label: "Camera Raw Filter", ids: &[], from: camera_raw_from, to: |_, _| None },
     // Adjustments (Image › Adjustments).
     Event {
         code: "",
