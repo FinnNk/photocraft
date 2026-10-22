@@ -2096,6 +2096,7 @@ fn partial_color_balance_and_hue_saturation_edits_refuse_strict_export() {
         json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": 5}),
         json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 1, "saturation": 0, "lightness": 0, "range": [0, 20, 40]}}),
         json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 1, "saturation": 0, "lightness": 0, "range": "invalid"}}),
+        json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 1, "saturation": 0, "lightness": 0, "range": [315, 345.5, 15, 45]}}),
     ] {
         assert!(export("Audit8", &[&one(bad.clone())], &[], false).is_err(), "{bad}");
     }
