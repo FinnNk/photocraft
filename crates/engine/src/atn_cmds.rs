@@ -1665,10 +1665,14 @@ fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
             // `layer.setAdjustment` changes only the settings it names. Color Balance and
             // Hue/Saturation descriptors carry every setting, filling absent ones with defaults,
             // so a partial edit would replay as one that also resets the rest (#8531).
-            let given = |keys: &[&str]| keys.iter().all(|k| p.get(*k).is_some_and(|v| !v.is_null()));
+            let given = |p: &Value, keys: &[&str]| keys.iter().all(|k| p.get(*k).is_some_and(|v| !v.is_null()));
             let complete = match kind {
-                "colorBalance" => given(&["shadows", "midtones", "highlights", "preserveLuminosity"]),
-                "hueSaturation" => given(&["colorize", "hue", "saturation", "lightness"]),
+                "colorBalance" => given(p, &["shadows", "midtones", "highlights", "preserveLuminosity"]),
+                // Every colour range written carries its own hue, saturation and lightness too.
+                "hueSaturation" => {
+                    given(p, &["colorize", "hue", "saturation", "lightness"])
+                        && HUE_RANGES.iter().filter_map(|r| p.get(*r).filter(|v| v.is_object())).all(|r| given(r, &["hue", "saturation", "lightness"]))
+                }
                 _ => true,
             };
             if !complete {

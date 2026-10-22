@@ -2079,6 +2079,12 @@ fn partial_color_balance_and_hue_saturation_edits_refuse_strict_export() {
     assert_eq!(p.get("preserveLuminosity"), Some(&json!(false)), "{p}");
     let hue = json!({"kind": "hueSaturation", "colorize": false, "hue": 20, "saturation": -5, "lightness": 0});
     assert!(export("Audit8", &[&one(hue)], &[], false).is_ok());
+    // A colour range written without all of its own settings would reset the rest too.
+    let range = json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 10}});
+    assert!(export("Audit8", &[&one(range)], &[], false).is_err());
+    let range =
+        json!({"kind": "hueSaturation", "colorize": false, "hue": 0, "saturation": 0, "lightness": 0, "reds": {"hue": 10, "saturation": 5, "lightness": -5}});
+    assert!(export("Audit8", &[&one(range)], &[], false).is_ok());
 }
 
 /// Photoshop's Close has no document target: a Close of a specific document must not be
