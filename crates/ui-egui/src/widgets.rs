@@ -2315,6 +2315,20 @@ mod tests {
         assert!(h.state().chars().count() < super::TEXT_FIELD_LIMIT, "an edit keeps the bounded copy");
     }
 
+    /// #2150: text queued by the control channel (`ui.type`) joins the input in `raw_input_hook`
+    /// and is cut like the OS's, so the cap must run after it is appended.
+    #[test]
+    fn raw_input_hook_caps_synthetic_text() {
+        use eframe::App as _;
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.synthetic.push(egui::Event::Text("x".repeat(super::INPUT_EVENT_LIMIT + 10)));
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut raw);
+        let texts: Vec<usize> = raw.events.iter().filter_map(|e| if let egui::Event::Text(t) = e { Some(t.chars().count()) } else { None }).collect();
+        assert_eq!(texts, [super::INPUT_EVENT_LIMIT]);
+    }
+
     /// #2150: every text-carrying event is cut to the app-wide limit at a character boundary
     /// before any widget sees it; other events and short text pass untouched.
     #[test]
