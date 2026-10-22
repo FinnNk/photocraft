@@ -302,6 +302,19 @@ pub fn rasterize(layout: &TextLayout, transform: &Affine, format: PixelFormat, a
 
 /// [`rasterize`] with the glyph outlines bent by `warp` (Type › Warp Text).
 pub fn rasterize_warped(layout: &TextLayout, transform: &Affine, format: PixelFormat, antialias: AntiAlias, warp: Option<&Warp>) -> Rendered {
+    rasterize_passes(layout, transform, format, antialias, warp, true)
+}
+
+/// [`rasterize_warped`] with every colour's coverage either confined to that colour's own ink
+/// (`per_colour`) or spanning the whole text, the oracle the tests compare it with (#8602).
+pub(crate) fn rasterize_passes(
+    layout: &TextLayout,
+    transform: &Affine,
+    format: PixelFormat,
+    antialias: AntiAlias,
+    warp: Option<&Warp>,
+    per_colour: bool,
+) -> Rendered {
     let format = PixelFormat { alpha: true, ..format };
     let rect = ink_rect_warped(layout, transform, warp);
     let (w, h) = (rect.width() as usize, rect.height() as usize);
@@ -326,8 +339,24 @@ pub fn rasterize_warped(layout: &TextLayout, transform: &Affine, format: PixelFo
             colors.push(st.color);
         }
     }
+    let whole = Rect::new(0, 0, w as i32, h as i32);
     for c in &colors {
-        let Some(mut cov) = Coverage::try_new(w, h) else {
+        // Rasterise each colour only over its own glyphs (every offset of faux bold included):
+        // a full-size pass per colour made text with many coloured runs cost colours x area
+        // (#8602). Outside its ink a colour's coverage is zero, so the result is the same.
+        let sub = if per_colour {
+            let mut b = Bounds::default();
+            draw_pass(layout, &xf, &mut b, Some(c), warp, Pass::All);
+            b.rect.map(rect_from_bounds).unwrap_or(Rect::EMPTY).intersect(&whole)
+        } else {
+            whole
+        };
+        if sub.is_empty() {
+            continue;
+        }
+        let (sw, sh) = (sub.width() as usize, sub.height() as usize);
+        let xf = Xform([1.0, 0.0, 0.0, 1.0, -sub.x0 as f64, -sub.y0 as f64]).mul(&xf);
+        let Some(mut cov) = Coverage::try_new(sw, sh) else {
             return nothing(format);
         };
         draw_pass(layout, &xf, &mut cov, Some(c), warp, Pass::Plain);
@@ -336,7 +365,7 @@ pub fn rasterize_warped(layout: &TextLayout, transform: &Affine, format: PixelFo
         };
         if bold {
             for k in 0..BOLD_OFFSETS.len() {
-                let Some(mut bc) = Coverage::try_new(w, h) else {
+                let Some(mut bc) = Coverage::try_new(sw, sh) else {
                     return nothing(format);
                 };
                 draw_pass(layout, &xf, &mut bc, Some(c), warp, Pass::Bold(k));
@@ -350,7 +379,7 @@ pub fn rasterize_warped(layout: &TextLayout, transform: &Affine, format: PixelFo
         }
         let comps = color_in(&format, c);
         let a = c.alpha.clamp(0.0, 1.0);
-        composite(&mut acc, &cov, w, stride, &comps, a, antialias);
+        composite(&mut acc, w, sub, &cov, stride, &comps, a, antialias);
     }
     // Unpremultiply.
     unpremultiply(&mut acc, n, stride, format.sample);
@@ -359,12 +388,19 @@ pub fn rasterize_warped(layout: &TextLayout, transform: &Affine, format: PixelFo
     Rendered { surface, rect }
 }
 
-/// Composites one colour's coverage over the premultiplied accumulator, after [`shape_antialias_coverage`].
-/// A pixel's maths reads and writes only its own slots, so the rows are done in any
-/// order — one per thread — for exactly the same bytes.
-fn composite(acc: &mut [f32], cov: &[f32], width: usize, stride: usize, comps: &[f32], a: f32, antialias: AntiAlias) {
+/// Composites one colour's coverage, covering `sub` of a `width`-pixel-wide premultiplied
+/// accumulator, after [`shape_antialias_coverage`]. A pixel's maths reads and writes only its own
+/// slots, so the rows are done in any order — one per thread — for exactly the same bytes.
+#[allow(clippy::too_many_arguments)]
+fn composite(acc: &mut [f32], width: usize, sub: Rect, cov: &[f32], stride: usize, comps: &[f32], a: f32, antialias: AntiAlias) {
     let n = comps.len();
+    let (x0, x1) = (sub.x0.max(0) as usize * stride, sub.x1.max(0) as usize * stride);
+    let (y0, sw, sh) = (sub.y0.max(0) as usize, sub.width() as usize, sub.height() as usize);
+    if sw == 0 || sh == 0 {
+        return;
+    }
     let row = |acc: &mut [f32], cov: &[f32]| {
+        let Some(acc) = acc.get_mut(x0..x1) else { return };
         for (cv, px) in cov.iter().zip(acc.chunks_exact_mut(stride)) {
             let cv = shape_antialias_coverage(*cv, antialias);
             let s = cv * a;
@@ -379,9 +415,9 @@ fn composite(acc: &mut [f32], cov: &[f32], width: usize, stride: usize, comps: &
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    acc.par_chunks_mut(width * stride).zip(cov.par_chunks(width)).for_each(|(a, c)| row(a, c));
+    acc.par_chunks_mut(width * stride).skip(y0).take(sh).zip(cov.par_chunks(sw)).for_each(|(a, c)| row(a, c));
     #[cfg(target_arch = "wasm32")]
-    acc.chunks_mut(width * stride).zip(cov.chunks(width)).for_each(|(a, c)| row(a, c));
+    acc.chunks_mut(width * stride).skip(y0).take(sh).zip(cov.chunks(sw)).for_each(|(a, c)| row(a, c));
 }
 
 /// Divides the premultiplied accumulator back to straight colour. Each pixel stands alone.
