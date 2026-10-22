@@ -814,6 +814,40 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
     out
 }
 
+/// The most characters a [`text_field`] holds unless its caller sets a limit: far beyond any
+/// search, name or hex value, yet a pasted multi-gigabyte string is cut at the field instead of
+/// being laid out every frame (#2150).
+pub const TEXT_FIELD_LIMIT: usize = 1024;
+
+/// The most characters one typed, pasted or IME-committed text event carries into the app
+/// ([`cap_text_events`]): a megabyte of text, more than any field or text layer is pasted.
+pub const INPUT_EVENT_LIMIT: usize = 1 << 20;
+
+/// Cuts every text, paste and IME event to [`INPUT_EVENT_LIMIT`] characters (at a character
+/// boundary) before any widget sees it, so no text field -- whatever its own limit -- has to
+/// lay out an 8 GB paste (#2150).
+pub fn cap_text_events(events: &mut [egui::Event]) {
+    fn cut(text: &mut String) -> bool {
+        let Some((end, _)) = text.char_indices().nth(INPUT_EVENT_LIMIT) else { return false };
+        text.truncate(end);
+        true
+    }
+    for event in events {
+        match event {
+            egui::Event::Text(text) | egui::Event::Paste(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                cut(text);
+            }
+            // The highlighted range indexes the old text; past the cut it would point nowhere.
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars }) => {
+                if cut(text) && active_range_chars.as_ref().is_some_and(|r| r.end > INPUT_EVENT_LIMIT) {
+                    *active_range_chars = None;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Height of a [`text_field`]'s box, matching a [`value_field`].
 pub const TEXT_FIELD_H: f32 = 24.0;
 
@@ -832,7 +866,8 @@ pub fn text_field(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, widt
     text_field_ex(ui, id, text, hint, width, mono, None)
 }
 
-/// [`text_field`] limited to `char_limit` characters (a hex field's six digits, say).
+/// [`text_field`] limited to `char_limit` characters (a hex field's six digits, say), or to
+/// [`TEXT_FIELD_LIMIT`] without one.
 pub fn text_field_ex(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, width: f32, mono: bool, char_limit: Option<usize>) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(width.max(16.0), TEXT_FIELD_H), Sense::hover());
@@ -844,11 +879,14 @@ pub fn text_field_ex(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, w
     let inner = rect.shrink2(TEXT_FIELD_PAD);
     // TextEdit draws its text at the top of its rect; fill the box and centre the line in it, so
     // the text sits on the field's middle like a dropdown's or value field's.
-    let mut edit =
-        egui::TextEdit::singleline(text).id(id).hint_text(hint).frame(egui::Frame::NONE).font(font).min_size(inner.size()).vertical_align(egui::Align::Center);
-    if let Some(limit) = char_limit {
-        edit = edit.char_limit(limit);
-    }
+    let edit = egui::TextEdit::singleline(text)
+        .id(id)
+        .hint_text(hint)
+        .frame(egui::Frame::NONE)
+        .font(font)
+        .min_size(inner.size())
+        .vertical_align(egui::Align::Center)
+        .char_limit(char_limit.unwrap_or(TEXT_FIELD_LIMIT));
     // A child Ui keeps the field's selection colour local: `Visuals::selection` also fills selected
     // list rows and slider trails, which must keep the theme's.
     let layout = egui::Layout::centered_and_justified(egui::Direction::TopDown);
@@ -2223,6 +2261,54 @@ mod tests {
             h.run_steps(1);
         }
         assert_eq!(h.state().0, "abc", "typing reaches the bound string");
+    }
+
+    /// #2150: a huge paste into a plain text field stops at its limit instead of growing the
+    /// string (and its laid-out text) without bound.
+    #[test]
+    fn text_field_caps_a_huge_paste() {
+        use egui::accesskit::Role;
+        let mut h = Harness::new_ui_state(|ui, s: &mut String| drop(super::text_field(ui, egui::Id::new("tf"), s, "", 140.0, false)), String::new());
+        crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run();
+        h.get_by_role(Role::TextInput).click();
+        h.run_steps(1);
+        h.event(egui::Event::Paste("9".repeat(200_000)));
+        h.run_steps(1);
+        assert_eq!(h.state().chars().count(), super::TEXT_FIELD_LIMIT);
+        // A second paste adds nothing past the limit.
+        h.event(egui::Event::Paste("9".repeat(10)));
+        h.run_steps(1);
+        assert_eq!(h.state().chars().count(), super::TEXT_FIELD_LIMIT);
+    }
+
+    /// #2150: every text-carrying event is cut to the app-wide limit at a character boundary
+    /// before any widget sees it; other events and short text pass untouched.
+    #[test]
+    fn oversized_text_events_are_cut_before_widgets_see_them() {
+        let long = "é".repeat(super::INPUT_EVENT_LIMIT + 5);
+        let mut events = vec![
+            egui::Event::Paste(long.clone()),
+            egui::Event::Text(long.clone()),
+            egui::Event::Ime(egui::ImeEvent::Commit(long.clone())),
+            egui::Event::Ime(egui::ImeEvent::Preedit { text: long, active_range_chars: Some(0..super::INPUT_EVENT_LIMIT + 2) }),
+            egui::Event::Text("ok".into()),
+            egui::Event::Copy,
+        ];
+        super::cap_text_events(&mut events);
+        for e in &events[..4] {
+            let (egui::Event::Paste(t)
+            | egui::Event::Text(t)
+            | egui::Event::Ime(egui::ImeEvent::Commit(t))
+            | egui::Event::Ime(egui::ImeEvent::Preedit { text: t, .. })) = e
+            else {
+                panic!("{e:?}")
+            };
+            assert_eq!(t.chars().count(), super::INPUT_EVENT_LIMIT);
+        }
+        assert!(matches!(&events[3], egui::Event::Ime(egui::ImeEvent::Preedit { active_range_chars: None, .. })), "the range past the cut is dropped");
+        assert_eq!(events[4], egui::Event::Text("ok".into()));
+        assert_eq!(events[5], egui::Event::Copy);
     }
 
     /// Sets up a test with one value field. Its state is its value and how many times it changed.
