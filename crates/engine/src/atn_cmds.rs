@@ -3098,8 +3098,13 @@ fn camera_raw_from(d: &Descriptor) -> Mapped {
         // Absent members keep the command's defaults only when the whole group is absent.
         if v.iter().all(Option::is_none) { None } else { Some(v.into_iter().map(|n| Value::from(n.unwrap_or(0.0))).collect()) }
     };
-    if let (Some(a), Some(b), Some(c)) = (get_num(d, "PC_1"), get_num(d, "PC_2"), get_num(d, "PC_3")) {
-        m.insert("curveSplits".into(), json!([a, b, c]));
+    // The splits are one setting: all three, or none (the defaults); a partial set can't replay.
+    match (get_num(d, "PC_1"), get_num(d, "PC_2"), get_num(d, "PC_3")) {
+        (Some(a), Some(b), Some(c)) => {
+            m.insert("curveSplits".into(), json!([a, b, c]));
+        }
+        _ if ["PC_1", "PC_2", "PC_3"].iter().any(|k| d.get(k).is_some()) => return Mapped::Unsupported { harmless: false },
+        _ => {}
     }
     for (prefix, param) in [("HA_", "hslHue"), ("SA_", "hslSat"), ("LA_", "hslLum")] {
         let keys: Vec<String> = ["R", "O", "Y", "G", "A", "B", "P", "M"].iter().map(|c| format!("{prefix}{c}")).collect();
@@ -3128,7 +3133,10 @@ fn camera_raw_from(d: &Descriptor) -> Mapped {
     }
     // Point curves: flat `[in0, out0, in1, out1, …]` lists on 0..255, as the command's pairs.
     for (key, param) in [("Crv ", "pointCurve"), ("CrvR", "pointCurveRed"), ("CrvG", "pointCurveGreen"), ("CrvB", "pointCurveBlue")] {
-        let Some(list) = get_list(d, key) else { continue };
+        if d.get(key).is_none() {
+            continue;
+        }
+        let Some(list) = get_list(d, key) else { return Mapped::Unsupported { harmless: false } };
         let Some(flat) = list.iter().map(num).collect::<Option<Vec<f64>>>() else { return Mapped::Unsupported { harmless: false } };
         if flat.len() % 2 != 0 {
             return Mapped::Unsupported { harmless: false };
