@@ -31,9 +31,11 @@ impl Fault {
     }
 
     /// An out-of-memory error on a device that still works: freeing memory and trying again can
-    /// succeed, unlike after a loss or a validation error (#6564).
+    /// succeed, unlike after a loss or a validation error (#6564). Only wgpu's own out-of-memory
+    /// error is recorded with exactly [`OUT_OF_MEMORY`]; a validation error that merely mentions
+    /// memory is not one.
     pub fn is_out_of_memory(&self) -> bool {
-        matches!(self, Fault::Error(s) if s.to_ascii_lowercase().contains("out of memory"))
+        matches!(self, Fault::Error(s) if s == OUT_OF_MEMORY)
     }
 
     /// The driver's or wgpu's message.
@@ -53,6 +55,9 @@ impl fmt::Display for Fault {
         }
     }
 }
+
+/// The message an out-of-memory [`Fault::Error`] carries (wgpu's `Error::OutOfMemory`).
+pub const OUT_OF_MEMORY: &str = "Out of Memory";
 
 #[derive(Default)]
 struct Inner {
@@ -108,7 +113,13 @@ impl DeviceHealth {
         // Errors about invalid or lost objects follow a device loss whose callback may not have
         // run yet (it fires on the next poll).
         let lower = text.to_ascii_lowercase();
-        let fault = if lower.contains("lost") || lower.contains("destroyed") { Fault::Lost(first_line(&text)) } else { Fault::Error(first_line(&text)) };
+        let fault = if matches!(e, wgpu::Error::OutOfMemory { .. }) {
+            Fault::Error(OUT_OF_MEMORY.into())
+        } else if lower.contains("lost") || lower.contains("destroyed") {
+            Fault::Lost(first_line(&text))
+        } else {
+            Fault::Error(first_line(&text))
+        };
         self.mark(fault);
     }
 
@@ -237,6 +248,7 @@ mod tests {
         assert_eq!(first_line(&"a".repeat(300)).chars().count(), 201);
         assert!(Fault::Error("Out of Memory".into()).is_out_of_memory());
         assert!(!Fault::Error("Validation Error".into()).is_out_of_memory());
+        assert!(!Fault::Error("Validation Error: buffer allocation would run out of memory".into()).is_out_of_memory());
         assert!(!Fault::Lost("out of memory".into()).is_out_of_memory());
     }
 }
