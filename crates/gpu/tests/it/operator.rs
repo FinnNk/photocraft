@@ -199,6 +199,18 @@ fn outputs_are_reused_until_the_operator_changes() {
     assert!(render(&mut g, 4.0).operator_cells > 0, "first render runs the passes");
     assert_eq!(render(&mut g, 4.0).operator_cells, 0, "the same operator again: kept");
     assert!(render(&mut g, 12.0).operator_cells > 0, "a new radius runs them again");
+    // A drag whose reach crosses a margin step keeps the windows: no upload, only the passes. (On
+    // the other compositor, whose windows are first made at radius 40.)
+    let full = |g: &mut Gpu, radius: f32| {
+        g.paged.set_operators(doc.id, vec![operator(&doc, id, radius, false)]);
+        photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &doc, doc.bounds()).unwrap().1
+    };
+    full(&mut g, 40.0);
+    for radius in [44.0, 48.0, 36.0, 40.0] {
+        let stats = full(&mut g, radius);
+        assert!(stats.operator_cells > 0, "radius {radius}: the passes run");
+        assert_eq!(stats.bytes_uploaded, 0, "radius {radius}: the windows are kept");
+    }
 }
 
 #[test]
