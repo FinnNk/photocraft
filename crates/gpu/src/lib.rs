@@ -1895,15 +1895,21 @@ impl Compositor {
             return None;
         }
         let operator::Program::Separable(blur) = op.program.program();
-        // The cell's source window stays the same while the view moves (uploaded once); the blur
-        // and its output cover only the part this refresh draws.
-        let window = region.inflate(operator::apron(blur.reach()));
+        let (wk, ok, mk) = ((op.layer, Role::OperatorSource, cell), (op.layer, Role::Operator, cell), (op.layer, Role::OperatorMask, cell));
+        // The cell's source window stays the same while the view moves (uploaded once) and while
+        // a slider drag's reach still fits it; when it outgrows it, the new one has headroom, so
+        // a drag doesn't upload every window again at each step. The blur and its output cover
+        // only the part this refresh draws.
+        let needed = region.inflate(blur.reach());
+        let window = match self.residents.get(&wk).map(|r| r.region) {
+            Some(held) if held.contains_rect(&needed) => held,
+            _ => region.inflate(operator::apron(blur.reach().saturating_add(blur.reach() / 4))),
+        };
         let region = region.intersect(&self.frame_region);
         if region.is_empty() {
             return None;
         }
         let sub = region.inflate(operator::apron(blur.reach())).intersect(&window);
-        let (wk, ok, mk) = ((op.layer, Role::OperatorSource, cell), (op.layer, Role::Operator, cell), (op.layer, Role::OperatorMask, cell));
         let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST;
         let desc = |label, r: Rect| wgpu::TextureDescriptor {
             label: Some(label),
