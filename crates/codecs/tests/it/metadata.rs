@@ -321,6 +321,12 @@ fn webp_keeps_dpi_without_source_exif() {
     assert!(fidelity_warnings(&img, Format::WebP).contains(&FidelityWarning::DpiDropped));
     let back = decode(&encode(&img, Format::WebP, &EncodeOptions::default()).unwrap()).unwrap();
     assert!(back.meta.exif.is_some());
+    // The default 72 ppi needs no EXIF (a WebP without one opens at 72), so a plain export stays
+    // a simple-format file; nor does an image without a resolution.
+    img.meta = Metadata { dpi: Some((72.0, 72.0)), ..Default::default() };
+    assert!(!fidelity_warnings(&img, Format::WebP).contains(&FidelityWarning::DpiDropped));
+    let bytes = encode(&img, Format::WebP, &EncodeOptions { webp_lossless: false, ..Default::default() }).unwrap();
+    assert_eq!(bytes.get(12..16), Some(&b"VP8 "[..]));
     // Without a resolution or EXIF there is still no EXIF chunk.
     img.meta = Metadata::default();
     let back = decode(&encode(&img, Format::WebP, &EncodeOptions::default()).unwrap()).unwrap();

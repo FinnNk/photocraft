@@ -169,7 +169,9 @@ fn encode_lossy(img: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError
 /// so the resolution goes into EXIF, added when the image has none (#2399).
 pub(crate) fn export_exif(img: &Image) -> Option<Vec<u8>> {
     let exif = img.meta.exif.as_deref().unwrap_or_default();
-    if exif.is_empty() && img.meta.dpi.is_none() {
+    // A WebP without EXIF already reads as 72 ppi, so the default needs no block of its own (and
+    // the extended container it would bring to every web export).
+    if exif.is_empty() && img.meta.dpi.is_none_or(is_default_ppi) {
         return None;
     }
     let out = crate::resolution::export_exif_adding_missing_resolution(exif, img.meta.dpi).into_owned();
@@ -180,7 +182,13 @@ pub(crate) fn export_exif(img: &Image) -> Option<Vec<u8>> {
 /// own EXIF can't be parsed: that block is written as it is rather than replaced, so the
 /// resolution is dropped (and reported) instead of the metadata.
 pub(crate) fn keeps_dpi(img: &Image) -> bool {
-    img.meta.dpi.is_none() || export_exif(img).is_some_and(|e| crate::resolution::exif_resolution(&e).is_some())
+    let bare_default = img.meta.exif.as_deref().is_none_or(<[u8]>::is_empty) && img.meta.dpi.is_none_or(is_default_ppi);
+    bare_default || export_exif(img).is_some_and(|e| crate::resolution::exif_resolution(&e).is_some())
+}
+
+/// 72 ppi each way: what a file without a resolution opens as.
+fn is_default_ppi((x, y): (f32, f32)) -> bool {
+    (x - 72.0).abs() < 0.01 && (y - 72.0).abs() < 0.01
 }
 
 /// A RIFF chunk: FourCC, little-endian size, payload, padded to an even length.
