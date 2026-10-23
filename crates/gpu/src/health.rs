@@ -123,12 +123,14 @@ impl DeviceHealth {
         self.mark(fault);
     }
 
-    /// Mark the device unusable. The first fault is kept; a later device loss upgrades an error.
+    /// Mark the device unusable. The first fault is kept; a later device loss upgrades an error,
+    /// and a later out-of-memory error upgrades another one, so the canvas can still recover by
+    /// itself when memory ran out after a validation error in the same frame (#6564).
     pub fn mark(&self, fault: Fault) {
         let mut slot = self.0.fault.lock().unwrap_or_else(PoisonError::into_inner);
         let replace = match slot.as_ref() {
             None => true,
-            Some(old) => !old.is_lost() && fault.is_lost(),
+            Some(old) => !old.is_lost() && (fault.is_lost() || (fault.is_out_of_memory() && !old.is_out_of_memory())),
         };
         if replace {
             *slot = Some(fault);
@@ -249,6 +251,14 @@ mod tests {
         assert!(Fault::Error("Out of Memory".into()).is_out_of_memory());
         assert!(!Fault::Error("Validation Error".into()).is_out_of_memory());
         assert!(!Fault::Error("Validation Error: buffer allocation would run out of memory".into()).is_out_of_memory());
+        // A later out-of-memory error replaces another error, but never a loss.
+        let h = DeviceHealth::new();
+        h.mark(Fault::Error("Validation Error".into()));
+        h.mark(Fault::Error(OUT_OF_MEMORY.into()));
+        assert!(h.fault().is_some_and(|f| f.is_out_of_memory()));
+        h.mark(Fault::Lost("reset".into()));
+        h.mark(Fault::Error(OUT_OF_MEMORY.into()));
+        assert!(h.fault().is_some_and(|f| f.is_lost()));
         assert!(!Fault::Lost("out of memory".into()).is_out_of_memory());
     }
 }
