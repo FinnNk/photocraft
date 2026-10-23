@@ -103,7 +103,7 @@ fn probes_named(h: &mut Harness<'static, PhotocraftApp>, name: Option<&str>) -> 
     }
     let xf = ViewXform::active(h.state()).unwrap();
     let canvas = h.state().last_canvas_rect;
-    // Floating windows (the dialog) cover part of the canvas.
+    // Floating windows (the dialog) and their shadows cover part of the canvas.
     let windows: Vec<egui::Rect> = h.ctx.memory(|m| m.layer_ids().filter(|l| l.order != egui::Order::Background).filter_map(|l| m.area_rect(l.id)).collect());
     let mut out = Vec::new();
     for i in 0..30 {
@@ -111,7 +111,7 @@ fn probes_named(h: &mut Harness<'static, PhotocraftApp>, name: Option<&str>) -> 
             for y in (100..1400).step_by(170) {
                 let (x, y) = (40 + i * 64 + dx, y);
                 let p = xf.to_screen(x as f32 + 0.5, y as f32 + 0.5);
-                if canvas.shrink(4.0).contains(p) && !windows.iter().any(|w| w.expand(4.0).contains(p)) {
+                if canvas.shrink(4.0).contains(p) && !windows.iter().any(|w| w.expand(32.0).contains(p)) {
                     out.push(((x, y), image.get_pixel(p.x as u32, p.y as u32).0));
                 }
             }
@@ -139,7 +139,12 @@ fn oracle(app: &PhotocraftApp, radius: Option<f64>) -> std::sync::Arc<Document> 
 
 /// [`expected`] from an oracle document made once.
 fn expected_in(app: &PhotocraftApp, doc: &Document, p: (i32, i32)) -> ([(u8, u8); 3], f32) {
-    let buf = photocraft_compose::render(doc, photocraft_geom::Rect::new(p.0 - 1, p.1 - 1, p.0 + 2, p.1 + 2));
+    expected_around(app, doc, p, 1)
+}
+
+/// [`expected_in`] over the pixels within `reach` of `p` (a minified view blends more of them).
+fn expected_around(app: &PhotocraftApp, doc: &Document, p: (i32, i32), reach: i32) -> ([(u8, u8); 3], f32) {
+    let buf = photocraft_compose::render(doc, photocraft_geom::Rect::new(p.0 - reach, p.1 - reach, p.0 + reach + 1, p.1 + reach + 1));
     let (display, _) = crate::canvas::canvas_display(app, doc, None);
     let img = crate::canvas::display_image(display.as_deref(), &buf);
     let mut range = [(255u8, 0u8); 3];
@@ -241,21 +246,64 @@ fn a_failing_gpu_preview_falls_back_to_the_cpu_preview() {
     assert_shows(&mut h, Some(12.0), "CPU fallback");
 }
 
-/// Zoomed out the preview is the CPU's reduced proxy (a later phase moves it to the GPU).
+/// Zoomed out the preview runs on the GPU on a reduced proxy (Phase 2): the CPU preview's factor,
+/// and the same pixels as the CPU's proxy preview, through slider changes.
 #[test]
-fn zoomed_out_previews_stay_on_the_cpu() {
+fn zoomed_out_previews_run_on_a_gpu_proxy() {
     let _guard = photocraft_testkit::gpu_lock();
     let Some(rs) = render_state() else { return };
     // Big enough for a reduced proxy when zoomed out.
-    let (mut h, _) = harness_sized(rs, 4.0, true, [3000, 2400]);
+    let (mut h, id) = harness_sized(rs, 4.0, true, [3000, 2400]);
     if !gpu_path(&h) {
         return;
     }
     settle(&mut h, |app| on_gpu(app, 0));
     h.state_mut().ui.views[0].zoom = 0.25;
-    settle(&mut h, |app| app.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
-    assert!(!on_gpu(h.state_mut(), 0));
-    assert_eq!(h.state().filter_preview.as_ref().unwrap().key.k, 2, "the CPU proxy");
+    settle(&mut h, |app| app.filter_gpu_preview.as_ref().is_some_and(|p| p.proxy.as_ref().is_some_and(|g| g.drawn.is_some())));
+    assert!(on_gpu(h.state_mut(), 0), "the GPU previews zoomed out");
+    assert!(h.state().filter_preview.as_ref().is_none_or(|p| p.result.is_none()), "no CPU preview");
+    let (k, _, _) = gpu_proxy(h.state_mut(), 0).expect("the proxy");
+    assert_eq!(k, 2, "the CPU preview's factor");
+    for radius in [4.0, 12.0] {
+        set_radius(&mut h, id, radius);
+        h.run_steps(4);
+        let oracle = {
+            let st = h.state().session.active().unwrap();
+            std::sync::Arc::new(crate::filter_dialog::preview_document(&st.doc, st.active_layer, COMMAND, &json!({"radius": radius}), 2).unwrap())
+        };
+        // The proxy texture itself against the CPU's proxy preview (the exact check).
+        {
+            let (_, key, size) = gpu_proxy(h.state_mut(), 0).expect("the proxy");
+            let (_, tsize, texels) = h.state().gpu.as_ref().unwrap().read_texels(key).expect("the proxy texture");
+            assert_eq!(tsize, size);
+            let cpu = photocraft_compose::flatten(&oracle);
+            let worst = cpu.px.iter().zip(&texels).enumerate().fold((0.0f32, 0usize), |w, (i, (c, g))| {
+                let d = (0..3).map(|k| (c[k] * c[3] - g[k]).abs()).fold(0.0, f32::max);
+                if d > w.0 { (d, i) } else { w }
+            });
+            let (x, y) = (worst.1 % size[0] as usize, worst.1 / size[0] as usize);
+            // Texels are premultiplied, the composite straight; within a level and a half.
+            assert!(
+                worst.0 <= 1.5 / 255.0,
+                "radius {radius}: the proxy texture is {:.2}/255 off the CPU's proxy preview at ({x},{y}): cpu {:?} gpu {:?}",
+                worst.0 * 255.0,
+                cpu.px[worst.1],
+                texels[worst.1]
+            );
+        }
+        let shown = probes_named(&mut h, Some(&format!("proxy radius {radius}")));
+        let mut checked = 0;
+        for (p, px) in &shown {
+            // The probes are document points; the oracle is the k = 2 proxy, minified on screen.
+            let (want, alpha) = expected_around(h.state(), &oracle, (p.0 / 2, p.1 / 2), 2);
+            if alpha < 0.999 {
+                continue;
+            }
+            assert!(within(&want, *px), "radius {radius}: at {p:?} the canvas shows {px:?}, the CPU proxy {want:?}");
+            checked += 1;
+        }
+        assert!(checked >= 40, "radius {radius}: only {checked} probes");
+    }
 }
 
 /// OK keeps the GPU preview until the background job lands; Cancel restores the document.

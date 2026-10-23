@@ -2570,6 +2570,7 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
         // retaining only document ids freed the previews every frame (blank canvas while previewing).
         let mut live: Vec<u64> = app.session.documents().iter().flat_map(|st| [st.doc.id.0, st.doc.id.0 ^ (1u64 << 61), st.doc.id.0 ^ (1u64 << 62)]).collect();
         live.extend(crate::adjust_preview::gpu_keys(app));
+        live.extend(crate::filter_gpu_preview::gpu_keys(app));
         gpu.retain(&live);
     }
     crate::background_redraw::retain(app);
@@ -3647,6 +3648,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         if app.gpu.is_some()
             && gpu_ok
             && let Some((k, key, preview_size)) = ensure_adjust_proxy(app, idx, render_zoom)
+                .or_else(|| crate::filter_gpu_preview::gpu_proxy(app, idx))
                 .or_else(|| ensure_filter_preview(app, idx, &ctx))
                 .or_else(|| ensure_proxy_preview(app, idx, render_zoom))
         {
@@ -3682,6 +3684,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 hdr: hdr_preview(app, &doc),
                 offset: [0.0, 0.0],
             };
+            // The filter dialog's preview window draws a zoomed-out GPU preview from here too.
+            app.canvas_gpu.insert(doc.id, params);
             paint_gpu_view(&painter, rect, params, &pattern);
         } else if gpu_ok && ensure_gpu(app, &ctx, idx, redraw_focus(&target_xf, &xf)) {
             on_gpu = true;
