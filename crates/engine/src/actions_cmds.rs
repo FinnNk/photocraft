@@ -1210,6 +1210,37 @@ mod tests {
         s.execute("layer.moveTo", json!({"layer": mover.0, "target": upper.0, "position": "below"})).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
         assert_eq!(s.actions.list[0].steps[0].1, json!({"target": "Twin", "targetOccurrence": 1, "position": "below"}));
+        // The moved layer shares the target's name: the occurrence counts the other "Twin"s only,
+        // so it means the same layer before the move (on replay) as after it (when recorded).
+        let build = |s: &mut Session| {
+            s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+            for _ in 0..3 {
+                s.execute("layer.new.layer", json!({"name": "Twin"})).unwrap();
+            }
+            s.active().unwrap().doc.layers.iter().map(|l| l.id).collect::<Vec<_>>()
+        };
+        let mut s = Session::new();
+        let ids = build(&mut s);
+        let (lowest, top) = (ids[1], ids[3]);
+        s.execute("actions.record", json!({"name": "Twins"})).unwrap();
+        s.execute("layer.moveTo", json!({"layer": top.0, "target": lowest.0, "position": "below"})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        assert_eq!(s.actions.list[0].steps[0].1, json!({"target": "Twin", "targetOccurrence": 0, "position": "below"}));
+        let order = |s: &Session| s.active().unwrap().doc.layers.iter().map(|l| l.id).collect::<Vec<_>>();
+        let want: Vec<_> = order(&s).iter().map(|id| ids.iter().position(|x| x == id).unwrap()).collect();
+        let saved = serde_json::to_string(&s.actions.list).unwrap();
+        let mut replay = Session::new();
+        replay.actions.list = serde_json::from_str(&saved).unwrap();
+        let ids2 = build(&mut replay);
+        let result = replay.execute("actions.play", json!({"action": 0})).unwrap();
+        assert!(result.get("failed").is_none(), "{result}");
+        let got: Vec<_> = order(&replay).iter().map(|id| ids2.iter().position(|x| x == id).unwrap()).collect();
+        assert_eq!(got, want, "the same layer became the lowest");
+        // A drag of several layers keeps its ids (not covered by name).
+        s.execute("actions.record", json!({"name": "Several"})).unwrap();
+        s.execute("layer.moveTo", json!({"layers": [ids[2].0, ids[3].0], "target": ids[1].0, "position": "above"})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        assert_eq!(s.actions.list[1].steps[0].1["target"], json!(ids[1].0));
         // Bad targets are errors, not panics.
         for bad in [
             json!({"target": "Nobody"}),
