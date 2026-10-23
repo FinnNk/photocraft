@@ -277,3 +277,22 @@ fn partial_refreshes_match_as_the_view_moves() {
         }
     }
 }
+
+/// A document nested past the model's group limit can't hide an operator from the bounded
+/// lookups: the render fails (the CPU previews it).
+#[test]
+fn operators_in_over_deep_documents_fail_the_render() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (mut doc, id) = blur_doc(SampleType::U8);
+    let op = operator(&doc, id, 2.0, false);
+    let mut nest = Layer::group("deep", Vec::new());
+    for _ in 0..photocraft_doc::MAX_GROUP_DEPTH + 1 {
+        nest = Layer::group("deep", vec![nest]);
+    }
+    doc.layers.push(nest);
+    g.comp.set_operators(doc.id, vec![op]);
+    assert!(photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_err());
+}
