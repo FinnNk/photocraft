@@ -563,10 +563,10 @@ row = "new 3 GP document + first reduced canvas refresh"
 
 [[scenario]]
 id = "P64"
-title = "Filter dialog preview publish at k 1, 36 MP (display + texels)"
+title = "Filter dialog preview canvas upload at k 1, 36 MP, 1920x1080 view (display + texels)"
 issue = 5772
 bench = "interactive_bench"
-row = "filter preview publish, k 1 (display + texels)"
+row = "filter preview canvas upload, k 1 (view, display + texels)"
 
 [[scenario]]
 id = "P65"

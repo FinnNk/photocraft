@@ -80,7 +80,7 @@ Baseline: 2026-10-05, commit `f5d2bcb54a`, Apple M4 Pro (48 GB), GPU Apple M4 Pr
 | P60 | Layer opacity among 150 full-canvas layers, 6 MP (app GPU budget) | ≤ 30 ms p95 | – | – | – | – | – | not run | [#5973](https://github.com/storytold/photocraft/issues/5973) |
 | P61 | Hide a layer among 150 full-canvas layers, 6 MP (app GPU budget) | ≤ 30 ms p95 | – | – | – | – | – | not run | [#5973](https://github.com/storytold/photocraft/issues/5973) |
 | P62 | File > New 10 x 5 m at 200 ppi (3.1 GP) + first reduced canvas refresh | track only | – | – | – | – | – | not run | [#4017](https://github.com/storytold/photocraft/issues/4017) |
-| P64 | Filter dialog preview publish at k 1, 36 MP (display + texels) | track only | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
+| P64 | Filter dialog preview canvas upload at k 1, 36 MP, 1920x1080 view (display + texels) | track only | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 | P65 | Filter dialog preview window texture at k 1, 36 MP | track only | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 
 **Not measurable yet** (the code can't do it yet; no number is recorded):
