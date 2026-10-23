@@ -1236,6 +1236,33 @@ mod tests {
         assert!(result.get("failed").is_none(), "{result}");
         let got: Vec<_> = order(&replay).iter().map(|id| ids2.iter().position(|x| x == id).unwrap()).collect();
         assert_eq!(got, want, "the same layer became the lowest");
+        // A moved group holding a same-named layer: its contents don't count either, or moving the
+        // group past another "Twin" would shift the occurrence between recording and replay.
+        let build_group = |s: &mut Session| {
+            s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+            s.execute("layer.new.layer", json!({"name": "Twin"})).unwrap();
+            s.execute("layer.new.layer", json!({"name": "Twin"})).unwrap();
+            s.execute("layer.groupLayers", json!({})).unwrap();
+            let group = s.active().unwrap().active_layer.unwrap();
+            s.execute("layer.new.layer", json!({"name": "Twin"})).unwrap();
+            let top = s.active().unwrap().active_layer.unwrap();
+            s.execute("layer.select", json!({"layer": group.0, "mode": "replace"})).unwrap();
+            (group, top)
+        };
+        let mut g = Session::new();
+        let (group, top) = build_group(&mut g);
+        g.execute("actions.record", json!({"name": "Group"})).unwrap();
+        g.execute("layer.moveTo", json!({"layer": group.0, "target": top.0, "position": "above"})).unwrap();
+        g.execute("actions.stop", json!({})).unwrap();
+        let recorded = g.actions.list[0].steps[0].1.clone();
+        let saved = serde_json::to_string(&g.actions.list).unwrap();
+        let mut replay = Session::new();
+        replay.actions.list = serde_json::from_str(&saved).unwrap();
+        let (group2, _) = build_group(&mut replay);
+        let result = replay.execute("actions.play", json!({"action": 0})).unwrap();
+        assert!(result.get("failed").is_none(), "{recorded}: {result}");
+        let top_layer = |s: &Session| s.active().unwrap().doc.layers.last().map(|l| l.id);
+        assert_eq!(top_layer(&replay), Some(group2), "{recorded}: the group went to the top");
         // A drag of several layers keeps its ids (not covered by name).
         s.execute("actions.record", json!({"name": "Several"})).unwrap();
         s.execute("layer.moveTo", json!({"layers": [ids[2].0, ids[3].0], "target": ids[1].0, "position": "above"})).unwrap();

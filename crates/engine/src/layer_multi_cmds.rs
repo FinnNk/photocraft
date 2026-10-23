@@ -118,11 +118,24 @@ pub(crate) fn recorded_selection(s: &Session, mut p: Value) -> Value {
     p
 }
 
-/// The layers named `name`, in document order, other than the one being moved. Moving one layer
-/// never changes the others' order, so an occurrence counted among these means the same layer
-/// before the move (when an action replays it) and after it (when the step is recorded).
+/// The layers named `name`, in document order, other than the one being moved and (a group) its
+/// contents. Moving one layer never changes the others' order, so an occurrence counted among
+/// these means the same layer before the move (when an action replays it) and after it (when the
+/// step is recorded).
 fn same_named_targets(doc: &photocraft_doc::Document, name: &str, moved: Option<LayerId>) -> Vec<LayerId> {
-    doc.walk().into_iter().filter(|(_, _, l)| l.name == name && Some(l.id) != moved).map(|(_, _, l)| l.id).collect()
+    fn subtree(l: &Layer, out: &mut Vec<LayerId>, depth: usize) {
+        out.push(l.id);
+        if depth < 256
+            && let Some(children) = l.children()
+        {
+            children.iter().for_each(|c| subtree(c, out, depth + 1));
+        }
+    }
+    let mut skip = Vec::new();
+    if let Some(l) = moved.and_then(|id| doc.layer(id)) {
+        subtree(l, &mut skip, 0);
+    }
+    doc.walk().into_iter().filter(|(_, _, l)| l.name == name && !skip.contains(&l.id)).map(|(_, _, l)| l.id).collect()
 }
 
 /// A Layers-panel drag of the selected layer records its drop target by name (and which of
