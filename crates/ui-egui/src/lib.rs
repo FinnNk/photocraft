@@ -181,6 +181,7 @@ pub mod preset_files_ui;
 pub mod preset_panels;
 pub mod press_menu;
 mod pressure_curve_ui;
+pub mod preview_session;
 pub mod props_layout;
 pub mod proxy;
 pub mod puppet_ui;
