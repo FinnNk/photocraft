@@ -2757,6 +2757,8 @@ fn camera_raw_filter_steps_import_as_filter_camera_raw() {
     let text_contrast = desc("null").with("Cr12", D::Text(UnicodeString::new_nul("ten")));
     let text_hue = desc("null").with("HA_R", D::Text(UnicodeString::new_nul("red")));
     let text_grade = desc("null").with("STSH", D::Text(UnicodeString::new_nul("blue")));
+    let exposure_past_5 = desc("null").with("Ex12", D::Double(6.0));
+    let negative_sharpening = desc("null").with("Shrp", int(-10));
     let items = vec![
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(d)),
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(calibrated)),
@@ -2771,6 +2773,8 @@ fn camera_raw_filter_steps_import_as_filter_camera_raw() {
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(text_contrast)),
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(text_hue)),
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(text_grade)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(exposure_past_5)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(negative_sharpening)),
     ];
     let file = AtnFile {
         name: UnicodeString::new_nul("Looks"),
@@ -2796,7 +2800,7 @@ fn camera_raw_filter_steps_import_as_filter_camera_raw() {
     for (k, (id, _)) in steps.iter().enumerate().skip(1) {
         assert_eq!(id, PHOTOSHOP_STEP, "step {k}");
     }
-    assert_eq!(imp.unsupported.iter().map(|u| u.step).collect::<Vec<_>>(), (1..=12).collect::<Vec<_>>());
+    assert_eq!(imp.unsupported.iter().map(|u| u.step).collect::<Vec<_>>(), (1..=14).collect::<Vec<_>>());
     // The imported step plays.
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 16, "height": 12})).unwrap();

@@ -3078,6 +3078,20 @@ const CAMERA_RAW: &[F] = &[
     F("PCVH", "vignetteHighlights", Kind::Long),
 ];
 
+/// The range a Camera Raw Filter descriptor key's value can take, as `filter.cameraRaw` and the
+/// PSD Smart Filter mapping (`photocraft-io`'s `camera_raw_map.rs`) accept it.
+fn camera_raw_range(key: &str) -> std::ops::RangeInclusive<f64> {
+    match key {
+        "Ex12" => -5.0..=5.0,
+        "ShpR" => 0.5..=3.0,
+        "Shrp" => 0.0..=150.0,
+        "STSH" | "STHH" | "CgMH" | "CgGH" => 0.0..=360.0,
+        "PC_1" | "PC_2" | "PC_3" | "ShpD" | "ShpM" | "LNR " | "LNRD" | "CNR " | "CNRD" | "STSS" | "STHS" | "CgMS" | "CgGS" | "CgBl" | "GRNA" | "GRNS"
+        | "GRNF" | "PCVM" | "PCVF" | "PCVH" => 0.0..=100.0,
+        _ => -100.0..=100.0,
+    }
+}
+
 /// A recorded Camera Raw Filter step (`Adobe Camera Raw Filter`) as `filter.cameraRaw` (#6745).
 /// Settings the command has no counterpart for refuse the step rather than replaying a different
 /// look: the Calibration panel, a white balance other than Custom, and the controls the PSD
@@ -3092,9 +3106,14 @@ fn camera_raw_from(d: &Descriptor) -> Mapped {
     if !custom_wb || CALIBRATION.iter().any(|k| active(k, 0.0)) || NEUTRAL_ONLY.iter().any(|(k, n)| active(k, *n)) {
         return Mapped::Unsupported { harmless: false };
     }
-    // A value that is recorded but isn't a number can't replay: `fields_from` and `nums` would
-    // drop it (or read it as 0) and play a different look.
-    let unreadable = |k: &str| d.get(k).is_some() && get_num(d, k).is_none();
+    // A value that is recorded but isn't a number, or lies outside the slider's range, can't
+    // replay: `fields_from` and `nums` would drop it (or read it as 0), and playback would clamp
+    // it, so the step would play a different look. The ranges are the PSD mapping's.
+    let unreadable = |k: &str| match (d.get(k), get_num(d, k)) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(_), Some(v)) => k != "PCVS" && !(v.is_finite() && camera_raw_range(k).contains(&v)),
+    };
     let grouped = ["HA_", "SA_", "LA_"].iter().flat_map(|p| ["R", "O", "Y", "G", "A", "B", "P", "M"].map(|c| format!("{p}{c}")));
     let grades = ["STSH", "STSS", "CgSL", "CgMH", "CgMS", "CgML", "STHH", "STHS", "CgHL", "CgGH", "CgGS", "CgGL", "PC_1", "PC_2", "PC_3", "PCVS"];
     if CAMERA_RAW.iter().any(|F(k, ..)| unreadable(k)) || grouped.into_iter().any(|k| unreadable(&k)) || grades.iter().any(|k| unreadable(k)) {
