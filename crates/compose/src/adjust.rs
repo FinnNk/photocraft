@@ -143,7 +143,7 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
                 return;
             }
             let luts = tone_luts_depth(adj, depth);
-            apply_tone(buf, *space, &luts, identity);
+            apply_tone(buf, *space, &luts, identity, float_tone_extrapolates(adj, depth));
         }
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
             let table = (!*colorize && ranges.iter().any(|r| !r.is_neutral())).then(|| hue_range_tables(ranges));
@@ -563,8 +563,8 @@ fn apply_lab(adj: &Adjustment, buf: &mut Buffer, depth: Option<SampleType>) {
     }
 }
 
-/// Float RGB curve channels with no edit must preserve samples outside the LUT domain.
-/// Edited curves retain the existing spline/LUT behaviour until HDR extrapolation has an oracle.
+/// Float RGB curve channels with no edit must preserve samples outside the LUT domain; edited
+/// ones extend past it (see [`float_tone_extrapolates`]).
 pub fn float_tone_identity(adj: &Adjustment, depth: Option<SampleType>) -> [bool; 3] {
     match adj {
         Adjustment::Curves { master, per_channel, space: ToneSpace::Rgb, .. } if depth == Some(SampleType::F32) => {
@@ -574,9 +574,17 @@ pub fn float_tone_identity(adj: &Adjustment, depth: Option<SampleType>) -> [bool
     }
 }
 
-pub(crate) fn apply_tone(buf: &mut Buffer, space: ToneSpace, luts: &[Vec<f32>; 4], identity: [bool; 3]) {
+/// Whether an edited Curves adjustment continues past 0..1 instead of clipping: in a 32-bit RGB
+/// document Photoshop extends each curve beyond its end points along the slope of its end
+/// segments (#7157: `[[0,0],[255,128]]` maps -0.5 to -0.250980407 and 2 to 1.003921628).
+pub fn float_tone_extrapolates(adj: &Adjustment, depth: Option<SampleType>) -> bool {
+    matches!(adj, Adjustment::Curves { space: ToneSpace::Rgb, .. }) && depth == Some(SampleType::F32)
+}
+
+pub(crate) fn apply_tone(buf: &mut Buffer, space: ToneSpace, luts: &[Vec<f32>; 4], identity: [bool; 3], extrapolate: bool) {
+    let sample = if extrapolate { lut_extended } else { lut };
     match space {
-        ToneSpace::Rgb => map_rgb(buf, |c| std::array::from_fn(|i| if identity[i] { c[i] } else { lut(&luts[i], c[i]) })),
+        ToneSpace::Rgb => map_rgb(buf, |c| std::array::from_fn(|i| if identity[i] { c[i] } else { sample(&luts[i], c[i]) })),
         ToneSpace::Cmyk | ToneSpace::Lab => map_rgb(buf, |c| tone_in_space(space, luts, c)),
     }
 }
@@ -990,6 +998,24 @@ fn lut(table: &[f32], v: f32) -> f32 {
     let j = (i + 1).min(table.len() - 1);
     let f = x - i as f32;
     table[i] * (1.0 - f) + table[j] * f
+}
+
+/// Table steps the end slopes of [`lut_extended`] are measured over: one step's difference near
+/// 0.5 carries f32 rounding (2e-4 of the slope), while 16 steps are still only 0.4 % of the domain.
+pub const TONE_SLOPE_SPAN: usize = 16;
+
+/// [`lut`] continued past 0..1 along the slope of the table's end segments, as Photoshop applies
+/// a curve to float samples ([`float_tone_extrapolates`]). Inside the domain it is [`lut`];
+/// non-finite samples stay with it too, so an infinite one can't become NaN on a flat end.
+#[inline]
+fn lut_extended(table: &[f32], v: f32) -> f32 {
+    let n = table.len();
+    if !v.is_finite() || (0.0..=1.0).contains(&v) || n < 2 {
+        return lut(table, v);
+    }
+    let k = TONE_SLOPE_SPAN.min(n - 1);
+    let per_unit = (n - 1) as f32 / k as f32;
+    if v < 0.0 { table[0] + v * (table[k] - table[0]) * per_unit } else { table[n - 1] + (v - 1.0) * (table[n - 1] - table[n - 1 - k]) * per_unit }
 }
 
 /// Photo Filter's linear-light RGB matrix. Photoshop multiplies the pixel's D50 XYZ, relative to

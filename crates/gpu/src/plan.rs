@@ -1700,6 +1700,8 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             for (v, identity) in p[0].iter_mut().zip(adjust::float_tone_identity(adj, Some(depth))) {
                 *v = if identity { 1.0 } else { 0.0 };
             }
+            // p0.w: continue the curve past 0..1 (32-bit RGB Curves, #7157).
+            p[0][3] = if adjust::float_tone_extrapolates(adj, Some(depth)) { 1.0 } else { 0.0 };
             (7, p, Some(adjust::tone_luts_depth(adj, Some(depth)).iter().take(3).map(|t| to_row(t)).collect()))
         }
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
