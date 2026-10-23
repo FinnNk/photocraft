@@ -277,3 +277,37 @@ fn closing_the_document_releases_its_operator() {
     assert!(!h.state().gpu.as_ref().unwrap().has_operators(doc), "the closed document's operator is gone");
     assert!(h.state().filter_gpu_preview.is_none());
 }
+
+/// A mirrored view draws through the CPU canvas, which can't show operators: the GPU preview
+/// steps aside (and leaves no operator behind), as for any view the GPU canvas doesn't draw.
+#[test]
+fn a_mirrored_view_leaves_the_gpu_preview() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, _) = harness(rs, 4.0, true);
+    settle(&mut h, |app| on_gpu(app, 0));
+    h.state_mut().ui.view.flip_horizontal = true;
+    h.run_steps(4);
+    assert!(!on_gpu(h.state_mut(), 0));
+    let doc = h.state().session.active().unwrap().doc.id;
+    assert!(!h.state().gpu.as_ref().unwrap().has_operators(doc), "no operator left behind");
+}
+
+/// While OK's job runs, views of another document don't end the committing preview.
+#[test]
+fn another_documents_view_keeps_the_committing_preview() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, id) = harness(rs, 4.0, true);
+    settle(&mut h, |app| on_gpu(app, 0));
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    // The blurred document stays active; the new one is only asked about by a view.
+    h.state_mut().session.set_active(0);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let doc = h.state().session.active().unwrap().doc.id;
+    if h.state().session.job_on(doc).is_some() {
+        assert!(display_doc(h.state_mut(), 1).is_none(), "nothing for the other document");
+        assert!(on_gpu(h.state_mut(), 0), "the committing preview stays");
+        assert!(h.state().gpu.as_ref().unwrap().has_operators(doc));
+    }
+}

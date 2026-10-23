@@ -91,6 +91,9 @@ pub fn ineligible(app: &PhotocraftApp, idx: usize, params: &Value) -> Option<&'s
     if crate::canvas::filter_preview_factor(app, doc, COMMAND, params) != 1 {
         return Some("zoomed out");
     }
+    if !gpu_view(app, idx) {
+        return Some("the view is mirrored or pixel-aspect corrected");
+    }
     if !gpu.supports(doc) || !gpu.operators_supported() {
         return Some("the GPU compositor can't draw it");
     }
@@ -111,6 +114,13 @@ fn under_effects(layers: &[photocraft_doc::Layer], target: LayerId, depth: usize
 
 fn doc_holds(layers: &[photocraft_doc::Layer], target: LayerId, depth: usize) -> bool {
     depth < 256 && layers.iter().any(|l| l.id == target || l.children().is_some_and(|c| doc_holds(c, target, depth + 1)))
+}
+
+/// Whether document `idx`'s view draws on the GPU canvas: a mirrored or pixel-aspect-corrected
+/// view draws through the CPU canvas (`gpu_canvas::gpu_view_ok`), which can't show operators.
+fn gpu_view(app: &PhotocraftApp, idx: usize) -> bool {
+    let rotation = app.ui.views.get(idx).map_or(0.0, |v| v.rotation);
+    crate::gpu_canvas::gpu_view_ok(app.ui.view.flip_horizontal, rotation, app.ui.view.display_aspect())
 }
 
 /// The blur for `params` on `target` of `doc`, exactly as the engine applies it
@@ -138,10 +148,12 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
     let st = app.session.documents().get(idx)?;
     let (doc_id, revision) = (st.doc.id, st.revision);
     // After OK: kept while the job applying it runs on the same revision.
+    // (Only for the session's own document: views of others ask too.)
     if let Some(p) = app.filter_gpu_preview.as_mut()
         && p.committing
+        && p.s.doc == doc_id
     {
-        if p.s.doc == doc_id && p.s.revision == revision && app.session.job_on(doc_id).is_some() {
+        if p.s.revision == revision && app.session.job_on(doc_id).is_some() {
             return app.filter_gpu_preview.as_ref();
         }
         p.committing = false;
@@ -154,12 +166,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
     }
     let Some((dialog_id, params, preview)) = dialog(app) else {
         // Keep the closed dialog's session for the canvas's switch back, but show nothing.
-        if app.filter_gpu_preview.as_ref().is_some_and(|p| p.shown.is_some()) {
-            if let Some(p) = app.filter_gpu_preview.as_mut() {
-                p.shown = None;
-            }
-            clear_operators(app, doc_id);
-        }
+        hide(app);
         return None;
     };
     let target = st.active_layer?;
@@ -167,11 +174,12 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
     if app.filter_gpu_preview.as_ref().is_none_or(|p| p.s.session != session || p.s.doc != doc_id) {
         if let Some(reason) = ineligible(app, idx, &params) {
             log::debug!("filter preview on the CPU: {reason}");
-            if app.filter_gpu_preview.take().is_some() {
-                clear_operators(app, doc_id);
+            if let Some(p) = app.filter_gpu_preview.take() {
+                clear_operators(app, p.s.doc);
             }
             return None;
         }
+        hide(app);
         let st = app.session.documents().get(idx)?;
         let selection = st.doc.selection.clone().map(Arc::new);
         let (_, region) = blur_for(&st.doc, target, &params, selection.clone())?;
@@ -196,34 +204,21 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         }
         return app.filter_gpu_preview.as_ref();
     }
-    // Still zoomed in (the view's zoom picks the factor): else the CPU preview's proxy.
-    if crate::canvas::filter_preview_factor(app, &app.session.documents().get(idx)?.doc, COMMAND, &params) != 1 {
-        if app.filter_gpu_preview.as_ref().is_some_and(|p| p.shown.is_some()) {
-            if let Some(p) = app.filter_gpu_preview.as_mut() {
-                p.shown = None;
-            }
-            clear_operators(app, doc_id);
-        }
+    // Still zoomed in (the view's zoom picks the factor) on a GPU view: else the CPU preview.
+    if crate::canvas::filter_preview_factor(app, &app.session.documents().get(idx)?.doc, COMMAND, &params) != 1 || !gpu_view(app, idx) {
+        hide(app);
         return None;
     }
     let h = hash(&[params.to_string().as_bytes()]);
     if !preview {
-        if p.shown.is_some() {
-            if let Some(p) = app.filter_gpu_preview.as_mut() {
-                p.shown = None;
-            }
-            clear_operators(app, doc_id);
-        }
+        hide(app);
         return app.filter_gpu_preview.as_ref();
     }
     if p.shown.as_ref().is_none_or(|(sh, _)| *sh != h) {
         let st = app.session.documents().get(idx)?;
         let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone()) else {
             // Settings the GPU can't run (a reach past its limit): the CPU preview for them.
-            if let Some(p) = app.filter_gpu_preview.as_mut() {
-                p.shown = None;
-            }
-            clear_operators(app, doc_id);
+            hide(app);
             return None;
         };
         let op = LayerOperator { layer: p.target, program: Arc::new(blur) };
@@ -236,6 +231,16 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         p.shown = Some((h, op));
     }
     app.filter_gpu_preview.as_ref()
+}
+
+/// Show nothing for the session (its operators cleared on its own document), keeping it for the
+/// canvas's switch back.
+fn hide(app: &mut PhotocraftApp) {
+    let Some(p) = app.filter_gpu_preview.as_mut() else { return };
+    if p.shown.take().is_some() {
+        let doc = p.s.doc;
+        clear_operators(app, doc);
+    }
 }
 
 fn clear_operators(app: &PhotocraftApp, doc: DocId) {
