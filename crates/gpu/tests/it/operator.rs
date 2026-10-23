@@ -212,3 +212,43 @@ fn blur_descriptions_the_passes_cant_run_are_refused() {
     assert!(GaussianBlur::new(SeparableBlur::Kernel(vec![1.0]), Rect::EMPTY, r, None, false, SampleType::U8).is_none(), "no extent");
     assert!(GaussianBlur::new(SeparableBlur::Boxes(vec![5, 5, 7]), r, r, None, false, SampleType::U8).is_some());
 }
+
+/// What operators can't draw exactly fails the render (the caller previews on the CPU): a
+/// document whose filter runs on other channels than the page texels' RGB, and an operator layer
+/// under layer effects (its own, or a group's), whose shapes come from the unblurred pixels.
+#[test]
+fn operators_the_gpu_cant_draw_exactly_fail_the_render() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let render = |g: &mut Gpu, doc: &Document, op: LayerOperator| {
+        g.comp.set_operators(doc.id, vec![op]);
+        photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, doc, doc.bounds())
+    };
+    // Lab.
+    let (mut lab, id) = blur_doc(SampleType::U8);
+    lab.mode = ColorMode::Lab;
+    let op = operator(&lab, id, 4.0, false);
+    assert!(render(&mut g, &lab, op).is_err(), "Lab");
+    // Effects on the layer.
+    let (mut doc, id) = blur_doc(SampleType::U8);
+    let op = operator(&doc, id, 4.0, false);
+    doc.layer_mut(id).unwrap().effects.items =
+        vec![photocraft_doc::Effect::Stroke(stroke(3.0, photocraft_doc::StrokePosition::Outside, photocraft_doc::FxPaint::Color(Color::rgb(1.0, 0.0, 0.0))))];
+    assert!(render(&mut g, &doc, op.clone()).is_err(), "effects on the layer");
+    // Effects on a group holding it.
+    let (doc, _) = blur_doc(SampleType::U8);
+    let small = noise_layer("small", PixelFormat::RGBA8, Rect::new(120, 80, 150, 110), 5, 1.0);
+    let id = small.id;
+    let mut group = Layer::group("group", vec![small]);
+    group.effects.items =
+        vec![photocraft_doc::Effect::Stroke(stroke(3.0, photocraft_doc::StrokePosition::Outside, photocraft_doc::FxPaint::Color(Color::rgb(1.0, 0.0, 0.0))))];
+    let mut doc = doc;
+    doc.layers.push(group);
+    let op = operator(&doc, id, 4.0, false);
+    assert!(render(&mut g, &doc, op).is_err(), "effects on a group");
+    // Without the operator the same document draws.
+    g.comp.clear_operators(doc.id);
+    assert!(photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_ok());
+}

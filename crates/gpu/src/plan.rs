@@ -1055,6 +1055,10 @@ impl<'a> Planner<'a> {
     /// (atop = true: effects over the base treated as opaque, keeping the base's alpha).
     /// Consumes `backdrop`.
     fn effects(&mut self, layer: &'a Layer, clipped: &[&'a Layer], backdrop: Slot, atop: bool) -> Result<Slot, Unsupported> {
+        // Effect shapes and regions come from the layers' own pixels, not an operator's output.
+        if !self.ops.is_empty() && self.holds_op(layer, 0) {
+            return Err(Unsupported(format!("a layer operator under the effects of `{}` (previewed on the CPU)", layer.name)));
+        }
         let canvas = self.cx.canvas;
         let region = bounds::effect_region(layer, canvas);
         let sb = photocraft_compose::paint_bounds(layer).unwrap_or_else(|| bounds::layer_bounds(layer, canvas));

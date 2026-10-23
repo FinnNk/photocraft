@@ -1238,6 +1238,11 @@ impl Compositor {
         if !ops.is_empty() && !self.operators_supported(device) {
             return Err(Unsupported("GPU layer operators are unavailable on this device".into()));
         }
+        // Operators run on the page texels (RGB); the CPU filters CMYK, Lab and the other modes'
+        // own channels.
+        if !ops.is_empty() && !matches!(doc.mode, photocraft_color::ColorMode::Rgb | photocraft_color::ColorMode::Grayscale) {
+            return Err(Unsupported("layer operators need an RGB or Grayscale document (previewed on the CPU)".into()));
+        }
         let plan = plan::plan_with(doc, ops.iter().map(|o| o.layer).collect())?;
         self.frame_ops = ops.clone();
         self.check_fx(doc, &plan)?;
@@ -1884,14 +1889,27 @@ impl Compositor {
             std::hash::Hasher::finish(&h)
         };
         let fresh = |s: &Self, k: &ResKey, r: Rect, print: u64| s.residents.get(k).is_some_and(|x| x.region == r) && s.op_made.get(k) == Some(&print);
+        // A page reused in this call is marked used now, so making the next one can't evict it.
+        let touch = |s: &mut Self, k: &ResKey| {
+            let (frame, stamp) = (s.frame, s.stamp);
+            if let Some(r) = s.residents.get_mut(k) {
+                r.last_used = frame;
+                r.stamp = stamp;
+            }
+        };
         let mut changed = false;
-        if !fresh(self, &wk, window, source_print) {
+        if fresh(self, &wk, window, source_print) {
+            touch(self, &wk);
+        } else {
             let texture = self.create_layer_texture(device, &desc("pc_operator_source", window), wk, bytes(window), stats)?;
             let texels = operator::read_window(surface, window, blur.extent);
             operator::write_texels(queue, &texture, window.width(), window.height(), &texels);
             self.staged += bytes(window);
             stats.bytes_uploaded += bytes(window) as usize;
-            let resident = self.operator_resident(texture, window, surface, doc);
+            let mut resident = self.operator_resident(texture, window, surface, doc);
+            // The fingerprint hashes the tiles' addresses: holding them keeps another tile from
+            // taking one of those addresses while the page is kept.
+            resident.tiles = tiles.iter().cloned().collect();
             self.residents.insert(wk, resident);
             self.op_made.insert(wk, source_print);
             changed = true;
@@ -1905,7 +1923,9 @@ impl Compositor {
                 std::hash::Hash::hash(&(Arc::as_ptr(sel) as usize, *sr), &mut h);
                 std::hash::Hasher::finish(&h)
             };
-            if !sr.is_empty() && !fresh(self, &mk, *sr, print) {
+            if fresh(self, &mk, *sr, print) {
+                touch(self, &mk);
+            } else if !sr.is_empty() {
                 let texture = self.create_layer_texture(device, &desc("pc_operator_selection", *sr), mk, bytes(*sr), stats)?;
                 let k: Vec<[f32; 4]> = operator::read_selection(sel, *sr).into_iter().map(|v| [v, 0.0, 0.0, 0.0]).collect();
                 operator::write_texels(queue, &texture, sr.width(), sr.height(), &k);
@@ -1928,7 +1948,11 @@ impl Compositor {
                 return None;
             }
             let out = self.create_layer_texture(device, &desc("pc_operator_output", region), ok, bytes(region), stats)?;
-            let source = self.residents.get(&wk)?.texture.clone();
+            let Some(source) = self.residents.get(&wk).map(|r| r.texture.clone()) else {
+                // Evicted making room for the output: the refresh goes to the CPU.
+                self.layer_alloc = Some(OVER_BUDGET.into());
+                return None;
+            };
             let sel = selection.as_ref().and_then(|(_, sr)| {
                 let r = self.residents.get(&mk)?;
                 Some((sr.translate(-region.x0, -region.y0), r.texture.create_view(&Default::default())))
