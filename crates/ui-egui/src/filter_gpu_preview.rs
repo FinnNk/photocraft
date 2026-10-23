@@ -36,6 +36,8 @@ pub struct FilterGpuPreview {
     target: LayerId,
     /// The selection, shared by every operator of the session (its identity keys the GPU's copy).
     selection: Option<Arc<photocraft_raster::Surface>>,
+    /// The target's and the selection's content bounds, measured when the session started.
+    measured: Measured,
     /// The settings hash shown and its operator; `None` when the dialog's Preview is off.
     shown: Option<(u64, LayerOperator)>,
     /// The GPU couldn't draw it: the dialog previews on the CPU from now on.
@@ -123,14 +125,33 @@ fn gpu_view(app: &PhotocraftApp, idx: usize) -> bool {
     crate::gpu_canvas::gpu_view_ok(app.ui.view.flip_horizontal, rotation, app.ui.view.display_aspect())
 }
 
+/// The content bounds of a session's target layer and selection: they don't change while the
+/// dialog is open, so they are measured once rather than on every slider step.
+#[derive(Clone, Copy, Debug)]
+struct Measured {
+    content: Rect,
+    selection: Option<Rect>,
+}
+
+impl Measured {
+    fn of(doc: &Document, target: LayerId) -> Option<Self> {
+        let content = doc.layer(target)?.surface()?.content_bounds();
+        Some(Measured { content, selection: doc.selection.as_ref().map(photocraft_raster::Surface::content_bounds) })
+    }
+}
+
 /// The blur for `params` on `target` of `doc`, exactly as the engine applies it
 /// (`photocraft_engine::filters::run_filter`): its output area, edge extent, selection and Lock
 /// Transparency. Also returns the area it changes.
-fn blur_for(doc: &Document, target: LayerId, params: &Value, selection: Option<Arc<photocraft_raster::Surface>>) -> Option<(GaussianBlur, Rect)> {
+fn blur_for(
+    doc: &Document,
+    target: LayerId,
+    params: &Value,
+    selection: Option<Arc<photocraft_raster::Surface>>,
+    measured: Measured,
+) -> Option<(GaussianBlur, Rect)> {
     let fp = photocraft_engine::filters::params_for(COMMAND, params)?;
-    let surf = doc.layer(target)?.surface()?;
-    let content = surf.content_bounds();
-    let sel_bounds = doc.selection.as_ref().map(photocraft_raster::Surface::content_bounds);
+    let Measured { content, selection: sel_bounds } = measured;
     let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
     let area = photocraft_algo::output_area(&fp, content, bounds, sel_bounds);
     let extent = photocraft_algo::separable::edge_extent(doc.bounds(), content);
@@ -196,12 +217,14 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         hide(app);
         let st = app.session.documents().get(idx)?;
         let selection = st.doc.selection.clone().map(Arc::new);
-        let (_, region) = blur_for(&st.doc, target, &params, selection.clone())?;
+        let measured = Measured::of(&st.doc, target)?;
+        let (_, region) = blur_for(&st.doc, target, &params, selection.clone(), measured)?;
         app.filter_gpu_preview = Some(FilterGpuPreview {
             s: PreviewSession::new(TAG, SESSION_BITS, doc_id, revision, session, region),
             dialog: dialog_id,
             target,
             selection,
+            measured,
             shown: None,
             failed: false,
             held: None,
@@ -230,7 +253,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
     }
     if p.shown.as_ref().is_none_or(|(sh, _)| *sh != h) {
         let st = app.session.documents().get(idx)?;
-        let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone()) else {
+        let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone(), p.measured) else {
             // Settings the GPU can't run (a reach past its limit): the CPU preview for them.
             hide(app);
             return None;
