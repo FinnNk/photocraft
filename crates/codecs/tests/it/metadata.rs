@@ -321,6 +321,12 @@ fn webp_keeps_dpi_without_source_exif() {
     assert!(fidelity_warnings(&img, Format::WebP).contains(&FidelityWarning::DpiDropped));
     let back = decode(&encode(&img, Format::WebP, &EncodeOptions::default()).unwrap()).unwrap();
     assert!(back.meta.exif.is_some());
+    // ...unless the XMP written beside it records the resolution, which readers look at first.
+    img.meta.xmp = Some(r#"<x:xmpmeta><rdf:Description tiff:XResolution="300/1" tiff:YResolution="150/1" tiff:ResolutionUnit="2"/></x:xmpmeta>"#.into());
+    assert!(!fidelity_warnings(&img, Format::WebP).contains(&FidelityWarning::DpiDropped));
+    let back = decode(&encode(&img, Format::WebP, &EncodeOptions::default()).unwrap()).unwrap();
+    let (x, y) = back.meta.dpi.expect("dpi from XMP");
+    assert!((x - 300.0).abs() < 0.05 && (y - 150.0).abs() < 0.05, "{x},{y}");
     // The default 72 ppi needs no EXIF (a WebP without one opens at 72), so a plain export stays
     // a simple-format file; nor does an image without a resolution.
     img.meta = Metadata { dpi: Some((72.0, 72.0)), ..Default::default() };
