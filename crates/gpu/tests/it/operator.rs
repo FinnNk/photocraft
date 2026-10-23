@@ -252,3 +252,28 @@ fn operators_the_gpu_cant_draw_exactly_fail_the_render() {
     g.comp.clear_operators(doc.id);
     assert!(photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_ok());
 }
+
+/// Refreshes of part of the canvas (a view, then the view panned and back) blur only what they
+/// draw, and each matches the CPU filter there, on whole textures and on 256 px pages.
+#[test]
+fn partial_refreshes_match_as_the_view_moves() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (mut doc, id) = blur_doc(SampleType::U8);
+    doc.selection = Some(feathered_selection());
+    for radius in [2.0, 12.0, 40.0] {
+        let expected = filtered(&doc, id, radius, false);
+        let op = operator(&doc, id, radius, false);
+        for (label, comp) in [("", &mut g.comp), (" (paged)", &mut g.paged)] {
+            comp.set_operators(doc.id, vec![op.clone()]);
+            for rect in [Rect::new(60, 40, 180, 120), Rect::new(170, 90, 300, 200), Rect::new(0, 0, 90, 70), Rect::new(60, 40, 180, 120)] {
+                let cpu = photocraft_compose::render(&expected, rect);
+                let out = photocraft_gpu::render_to_vec(comp, &g.device, &g.queue, &doc, rect).unwrap();
+                let worst = worst_diff(&cpu.px, &out);
+                assert!(worst.0 <= TOL, "radius {radius}{label} over {rect:?}: max diff {:.3}/255", worst.0 * 255.0);
+            }
+        }
+    }
+}

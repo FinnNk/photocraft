@@ -382,15 +382,17 @@ fn words(w: &[u32]) -> Vec<u8> {
     w.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
-/// Record the blur of `blur` over the `size` window in `source` into `encoder`, ping-ponging
-/// between the two `scratch` textures (at least `size`), ending in the returned one (straight
-/// RGBA over `size`). `None` when there's nothing to run.
+/// Record the blur of `blur` over the `size` part at `origin` of the window in `source` into
+/// `encoder`, ping-ponging between the two `scratch` textures (at least `size`), ending in the
+/// returned one (straight RGBA over `size`). `None` when there's nothing to run.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn record_blur<'s>(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     kit: &OpKit,
     blur: &SeparableBlur,
     source: &wgpu::Texture,
+    origin: [u32; 2],
     size: [u32; 2],
     scratch: &'s [wgpu::Texture; 2],
 ) -> Option<&'s wgpu::Texture> {
@@ -420,7 +422,8 @@ pub(crate) fn record_blur<'s>(
                 ((w / 2) as u32, 1.0 / w as f32, &kit.boxes)
             }
         };
-        let params = words(&[size[0], size[1], radius, axis, BOX_SEGMENT, u32::from(n == 0), u32::from(n == last), norm.to_bits()]);
+        let (ox, oy) = if n == 0 { (origin[0], origin[1]) } else { (0, 0) };
+        let params = words(&[size[0], size[1], radius, axis, BOX_SEGMENT, u32::from(n == 0), u32::from(n == last), norm.to_bits(), ox, oy]);
         let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("pc_operator_pass"),
             contents: &params,
@@ -456,8 +459,10 @@ pub(crate) fn record_blur<'s>(
 pub(crate) struct FinishParams {
     /// Output size.
     pub size: [u32; 2],
-    /// Where the output starts inside the windows.
+    /// Where the output starts inside the source window.
     pub offset: [u32; 2],
+    /// Where the output starts inside the blurred window.
+    pub blur_offset: [u32; 2],
     /// The filtered area in output pixels.
     pub area: Rect,
     /// The selection texture's origin in output pixels and size; `None` without a selection.
@@ -499,6 +504,10 @@ pub(crate) fn record_finish(
         u32::from(f.keep_alpha),
         f.levels.to_bits(),
         u32::from(f.has_alpha),
+        0,
+        f.blur_offset[0],
+        f.blur_offset[1],
+        0,
         0,
     ]);
     let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

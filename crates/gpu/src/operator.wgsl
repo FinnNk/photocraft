@@ -20,6 +20,8 @@ struct Pass {
     unpremultiply: u32,
     // Box passes: 1 / width, as the CPU computes it.
     norm: f32,
+    // Where the pass's window starts in `src` (the first pass reads part of a cell's window).
+    origin: vec2<u32>,
 }
 
 @group(0) @binding(0) var src: texture_2d<f32>;
@@ -36,7 +38,7 @@ fn texel(line: u32, i: i32) -> vec2<i32> {
 }
 
 fn load(at: vec2<i32>) -> vec4<f32> {
-    let v = textureLoad(src, at, 0);
+    let v = textureLoad(src, at + vec2<i32>(p.origin), 0);
     if p.premultiply == 0u {
         return v;
     }
@@ -113,6 +115,8 @@ struct Finish {
     // 1: the source has an alpha channel (else results keep alpha 1, as the CPU stores none).
     has_alpha: u32,
     _pad: u32,
+    // Where the output starts inside the blurred window (which covers only part of the source's).
+    blur_offset: vec2<u32>,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -141,7 +145,7 @@ fn finish(@builtin(global_invocation_id) g: vec3<u32>) {
         textureStore(out, at, orig);
         return;
     }
-    var v = textureLoad(blurred, w, 0);
+    var v = textureLoad(blurred, at + vec2<i32>(f.blur_offset), 0);
     // The selection mix (`mix_selection` in photocraft-algo).
     var k = 1.0;
     if f.sel_size.x > 0u {

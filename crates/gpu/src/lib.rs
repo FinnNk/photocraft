@@ -515,6 +515,9 @@ pub struct Compositor {
     /// The blur passes' two scratch textures, reused from cell to cell and step to step (made
     /// anew each time, they cost their allocation and clearing on every slider step).
     op_scratch: Option<([u32; 2], [wgpu::Texture; 2])>,
+    /// The part of the canvas the current refresh draws (tile aligned): operators compute only
+    /// their output there.
+    frame_region: Rect,
 }
 
 fn tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
@@ -800,6 +803,7 @@ impl Compositor {
             op_made: HashMap::new(),
             frame_ops: Vec::new(),
             op_scratch: None,
+            frame_region: Rect::EMPTY,
         }
         .with_texture_limit(device.limits().max_texture_dimension_2d)
     }
@@ -1240,6 +1244,7 @@ impl Compositor {
     ) -> Result<Stats, Unsupported> {
         let canvas = doc.bounds();
         let region = region.intersect(&canvas);
+        self.frame_region = tile_grid(region);
         let ops: Vec<LayerOperator> = self.operators.get(&doc.id).cloned().unwrap_or_default();
         if !ops.is_empty() && !self.operators_supported(device) {
             return Err(Unsupported("GPU layer operators are unavailable on this device".into()));
@@ -1866,7 +1871,14 @@ impl Compositor {
             return None;
         }
         let operator::Program::Separable(blur) = op.program.program();
+        // The cell's source window stays the same while the view moves (uploaded once); the blur
+        // and its output cover only the part this refresh draws.
         let window = region.inflate(operator::apron(blur.reach()));
+        let region = region.intersect(&self.frame_region);
+        if region.is_empty() {
+            return None;
+        }
+        let sub = region.inflate(operator::apron(blur.reach())).intersect(&window);
         let (wk, ok, mk) = ((op.layer, Role::OperatorSource, cell), (op.layer, Role::Operator, cell), (op.layer, Role::OperatorMask, cell));
         let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST;
         let desc = |label, r: Rect| wgpu::TextureDescriptor {
@@ -1969,7 +1981,7 @@ impl Compositor {
                 Some(r) => r.texture.clone(),
                 None => self.create_layer_texture(device, &desc("pc_operator_output", region), ok, bytes(region), stats)?,
             };
-            let size = [window.width(), window.height()];
+            let size = [sub.width(), sub.height()];
             if self.op_scratch.as_ref().is_none_or(|(s, _)| s[0] < size[0] || s[1] < size[1]) {
                 let grown = self.op_scratch.as_ref().map_or(size, |(s, _)| [s[0].max(size[0]), s[1].max(size[1])]);
                 let make = |label| operator::float_texture(device, label, grown[0], grown[1]);
@@ -1985,7 +1997,8 @@ impl Compositor {
                 Some((sr.translate(-region.x0, -region.y0), r.texture.create_view(&Default::default())))
             });
             let (Some(Some(kit)), Some((_, scratch))) = (self.op_kit.as_ref(), self.op_scratch.as_ref()) else { return None };
-            let blurred = operator::record_blur(device, encoder, kit, &blur.blur, &source, size, scratch)?;
+            let origin = [(sub.x0 - window.x0) as u32, (sub.y0 - window.y0) as u32];
+            let blurred = operator::record_blur(device, encoder, kit, &blur.blur, &source, origin, size, scratch)?;
             let fmt = surface.format();
             operator::record_finish(
                 device,
@@ -1997,6 +2010,7 @@ impl Compositor {
                 operator::FinishParams {
                     size: [region.width(), region.height()],
                     offset: [(region.x0 - window.x0) as u32, (region.y0 - window.y0) as u32],
+                    blur_offset: [(region.x0 - sub.x0) as u32, (region.y0 - sub.y0) as u32],
                     area: blur.area.intersect(&blur.extent).intersect(&region).translate(-region.x0, -region.y0),
                     selection: sel,
                     keep_alpha: blur.keep_alpha,
