@@ -560,3 +560,17 @@ title = "File > New 10 x 5 m at 200 ppi (3.1 GP) + first reduced canvas refresh"
 issue = 4017
 bench = "perf_scenarios"
 row = "new 3 GP document + first reduced canvas refresh"
+
+[[scenario]]
+id = "P64"
+title = "Filter dialog preview canvas upload at k 1, 36 MP, 1920x1080 view (display + texels)"
+issue = 5772
+bench = "interactive_bench"
+row = "filter preview canvas upload, k 1 (view, display + texels)"
+
+[[scenario]]
+id = "P65"
+title = "Filter dialog preview window texture at k 1, 36 MP"
+issue = 5772
+bench = "interactive_bench"
+row = "filter preview window texture, k 1"

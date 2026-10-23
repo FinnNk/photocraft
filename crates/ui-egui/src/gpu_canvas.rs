@@ -378,22 +378,44 @@ impl GpuCanvas {
 
     /// Replace the whole document image with a `format` texture of premultiplied `texels`.
     fn upload_full_as(&self, doc: u64, size: [u32; 2], format: wgpu::TextureFormat, texels: &[u8]) {
-        if size[0] == 0 || size[1] == 0 || texels.len() as u64 != size[0] as u64 * size[1] as u64 * texel_bytes(format) || !self.health.is_ok() {
+        if texels.len() as u64 != size[0] as u64 * size[1] as u64 * texel_bytes(format) {
             return;
         }
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let mut renderer = self.rs.renderer.write();
         let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
-        if res.docs.get(&doc).is_none_or(|d| d.size != size || d.format != format) {
-            let Some(tex) = DocTextures::new(device, res, size, self.tile, format) else {
-                res.docs.remove(&doc);
-                return;
-            };
-            res.docs.insert(doc, tex);
+        if !self.reserve_in(res, doc, size, format) {
+            return;
         }
         let Some(d) = res.docs.get(&doc) else { return };
         d.write(queue, [0, 0], size, size[0], texels);
         d.regenerate_mips(device, queue, res, [0, 0, size[0], size[1]]);
+    }
+
+    /// Make sure document `doc` has a `size` texture for a preview of a document of `depth`
+    /// (see [`GpuCanvas::format_for`]) without writing it, so [`GpuCanvas::upload_buffer_rect`]
+    /// can fill only what is shown. A texture it creates starts transparent; one it keeps holds its
+    /// old pixels. Returns false when there is no texture.
+    pub fn reserve_buffer(&self, doc: u64, size: [u32; 2], depth: photocraft_doc::SampleType) -> bool {
+        let format = self.format_for(depth, size);
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
+        self.reserve_in(res, doc, size, format)
+    }
+
+    /// [`GpuCanvas::reserve_buffer`] with the renderer's resources already locked.
+    fn reserve_in(&self, res: &mut Resources, doc: u64, size: [u32; 2], format: wgpu::TextureFormat) -> bool {
+        if size[0] == 0 || size[1] == 0 || !self.health.is_ok() {
+            return false;
+        }
+        if res.docs.get(&doc).is_none_or(|d| d.size != size || d.format != format) {
+            let Some(tex) = DocTextures::new(&self.rs.device, res, size, self.tile, format) else {
+                res.docs.remove(&doc);
+                return false;
+            };
+            res.docs.insert(doc, tex);
+        }
+        true
     }
 
     /// Replace a rectangle `origin..origin+size` of an uploaded document with premultiplied texels
@@ -433,6 +455,18 @@ impl GpuCanvas {
         let size = [buf.rect.width(), buf.rect.height()];
         let format = self.format_for(depth, size);
         self.upload_full_as(doc, size, format, &texels(format, &buf.px));
+    }
+
+    /// Upload the part `rect` (document pixels) of a CPU composite `buf` that covers it, converted
+    /// straight from `buf` (no copy of the part). Returns false as [`GpuCanvas::upload_rect`] does,
+    /// or when `buf` doesn't cover `rect`.
+    pub fn upload_buffer_part(&self, doc: u64, buf: &photocraft_compose::Buffer, rect: photocraft_geom::Rect) -> bool {
+        let Some(format) = self.format_of(doc) else { return false };
+        if rect.x0 < 0 || rect.y0 < 0 {
+            return false;
+        }
+        let Some(texels) = texels_of_part(format, buf, rect) else { return false };
+        self.upload_rect(doc, [rect.x0 as u32, rect.y0 as u32], [rect.width(), rect.height()], &texels)
     }
 
     /// Upload a CPU composite of a sub-rectangle (in document pixels, `buf.rect`).
@@ -1261,8 +1295,8 @@ fn texel_bytes(format: wgpu::TextureFormat) -> u64 {
     if format == FORMAT_HIGH { 8 } else { 4 }
 }
 
-/// Straight-alpha f32 RGBA → premultiplied texels of `format`.
-fn texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Vec<u8> {
+/// Straight-alpha f32 RGBA → premultiplied texels of `format` (public for `interactive_bench`).
+pub fn texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Vec<u8> {
     let mut out = Vec::new();
     texels_into(format, px, &mut out);
     out
@@ -1270,6 +1304,64 @@ fn texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Vec<u8> {
 
 /// [`texels`] into `out` (resized; reusing it across bands saves page-faulting a fresh buffer).
 fn texels_into(format: wgpu::TextureFormat, px: &[[f32; 4]], out: &mut Vec<u8>) {
+    let bpp = texel_bytes(format) as usize;
+    let convert = texel_converter(format);
+    out.clear();
+    out.resize(px.len() * bpp, 0);
+    #[cfg(not(target_arch = "wasm32"))]
+    if px.len() > 1 << 18 {
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(16);
+        let chunk = px.len().div_ceil(threads);
+        std::thread::scope(|s| {
+            for (src, dst) in px.chunks(chunk).zip(out.chunks_mut(chunk * bpp)) {
+                s.spawn(move || convert(src, dst));
+            }
+        });
+        return;
+    }
+    convert(px, out);
+}
+
+/// [`texels`] of the part `rect` of `buf` (which must cover it), converted row by row straight
+/// from `buf` rather than from a copy of the part. `None` when `buf` doesn't cover `rect`. Public
+/// for `interactive_bench`.
+pub fn texels_of_part(format: wgpu::TextureFormat, buf: &photocraft_compose::Buffer, rect: photocraft_geom::Rect) -> Option<Vec<u8>> {
+    if rect.is_empty() || !buf.rect.contains_rect(&rect) {
+        return None;
+    }
+    let (stride, w, h) = (buf.rect.width() as usize, rect.width() as usize, rect.height() as usize);
+    let (dx, dy) = ((rect.x0 - buf.rect.x0) as usize, (rect.y0 - buf.rect.y0) as usize);
+    if buf.px.len() < stride.checked_mul(dy + h)? {
+        return None;
+    }
+    let bpp = texel_bytes(format) as usize;
+    let convert = texel_converter(format);
+    let mut out = vec![0u8; w * h * bpp];
+    let rows = |first: usize, dst: &mut [u8]| {
+        for (i, row) in dst.chunks_mut(w * bpp).enumerate() {
+            let start = (dy + first + i) * stride + dx;
+            if let Some(src) = buf.px.get(start..start + w) {
+                convert(src, row);
+            }
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if w * h > 1 << 18 {
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(16);
+        let band = h.div_ceil(threads);
+        std::thread::scope(|s| {
+            for (i, dst) in out.chunks_mut(band * w * bpp).enumerate() {
+                s.spawn(move || rows(i * band, dst));
+            }
+        });
+        return Some(out);
+    }
+    rows(0, &mut out);
+    Some(out)
+}
+
+/// The straight-alpha f32 RGBA → premultiplied `format` texel conversion.
+fn texel_converter(format: wgpu::TextureFormat) -> fn(&[[f32; 4]], &mut [u8]) {
     fn rgba8(src: &[[f32; 4]], dst: &mut [u8]) {
         for (o, p) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src) {
             let a = p[3].clamp(0.0, 1.0);
@@ -1286,22 +1378,7 @@ fn texels_into(format: wgpu::TextureFormat, px: &[[f32; 4]], out: &mut Vec<u8>) 
             *o = [r[0], r[1], g[0], g[1], b[0], b[1], a[0], a[1]];
         }
     }
-    let bpp = texel_bytes(format) as usize;
-    let convert = if format == FORMAT_HIGH { rgba16f } else { rgba8 };
-    out.clear();
-    out.resize(px.len() * bpp, 0);
-    #[cfg(not(target_arch = "wasm32"))]
-    if px.len() > 1 << 18 {
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(16);
-        let chunk = px.len().div_ceil(threads);
-        std::thread::scope(|s| {
-            for (src, dst) in px.chunks(chunk).zip(out.chunks_mut(chunk * bpp)) {
-                s.spawn(move || convert(src, dst));
-            }
-        });
-        return;
-    }
-    convert(px, out);
+    if format == FORMAT_HIGH { rgba16f } else { rgba8 }
 }
 
 /// IEEE 754 binary32 → binary16, round to nearest even; overflow saturates to the largest
@@ -2630,6 +2707,25 @@ mod mip_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #5772: converting a part straight from a composite gives the texels of a copy of that part,
+    /// in both texture formats and across the threaded size, and refuses a part it doesn't cover.
+    #[test]
+    fn texels_of_a_part_match_the_texels_of_a_copy() {
+        let rect = photocraft_geom::Rect::new(-5, 3, 995, 803);
+        let px = (0..rect.width() * rect.height()).map(|i| [(i % 251) as f32 / 250.0, (i % 7) as f32 / 3.0 - 0.5, f32::NAN, (i % 13) as f32 / 12.0]).collect();
+        let buf = photocraft_compose::Buffer { rect, px };
+        for format in [FORMAT, FORMAT_HIGH] {
+            for part in [photocraft_geom::Rect::new(0, 3, 1, 4), photocraft_geom::Rect::new(10, 20, 700, 790), rect] {
+                let copy = crate::filter_preview_ui::crop(&buf, part);
+                assert_eq!(texels_of_part(format, &buf, part), Some(texels(format, &copy.px)), "{format:?} {part:?}");
+            }
+            assert_eq!(texels_of_part(format, &buf, rect.inflate(1)), None, "not covered");
+            assert_eq!(texels_of_part(format, &buf, photocraft_geom::Rect::EMPTY), None);
+            let short = photocraft_compose::Buffer { rect, px: vec![[0.0; 4]; 10] };
+            assert_eq!(texels_of_part(format, &short, photocraft_geom::Rect::new(0, 700, 10, 800)), None, "a short buffer");
+        }
+    }
 
     /// A GPU measurement arrives a frame or two after its refresh, so most GPU refreshes carry
     /// none; the last one reported must stand until a newer one lands. A CPU refresh is
