@@ -382,16 +382,18 @@ fn words(w: &[u32]) -> Vec<u8> {
     w.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
-/// Record the blur of `blur` over the `size` window in `source` into `encoder`, ending in the
-/// returned texture (straight RGBA, `size`). `None` when there's nothing to run.
-pub(crate) fn record_blur(
+/// Record the blur of `blur` over the `size` window in `source` into `encoder`, ping-ponging
+/// between the two `scratch` textures (at least `size`), ending in the returned one (straight
+/// RGBA over `size`). `None` when there's nothing to run.
+pub(crate) fn record_blur<'s>(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     kit: &OpKit,
     blur: &SeparableBlur,
     source: &wgpu::Texture,
     size: [u32; 2],
-) -> Option<wgpu::Texture> {
+    scratch: &'s [wgpu::Texture; 2],
+) -> Option<&'s wgpu::Texture> {
     use wgpu::util::DeviceExt;
     let axes: Vec<(usize, u32)> = match blur {
         SeparableBlur::Kernel(_) => vec![(0, 0), (0, 1)],
@@ -406,7 +408,7 @@ pub(crate) fn record_blur(
         contents: &weights,
         usage: wgpu::BufferUsages::STORAGE,
     });
-    let ping = [float_texture(device, "pc_operator_a", size[0], size[1]), float_texture(device, "pc_operator_b", size[0], size[1])];
+    let ping = scratch;
     let last = axes.len().checked_sub(1)?;
     for (n, &(i, axis)) in axes.iter().enumerate() {
         let src = if n == 0 { source } else { &ping[(n + 1) % 2] };
@@ -447,8 +449,7 @@ pub(crate) fn record_blur(
             }
         }
     }
-    let [a, b] = ping;
-    Some(if last % 2 == 0 { a } else { b })
+    ping.get(last % 2)
 }
 
 /// What the finishing pass needs besides its textures.

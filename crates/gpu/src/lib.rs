@@ -512,6 +512,9 @@ pub struct Compositor {
     op_made: HashMap<ResKey, u64>,
     /// The operators of the document the current refresh draws.
     frame_ops: Vec<LayerOperator>,
+    /// The blur passes' two scratch textures, reused from cell to cell and step to step (made
+    /// anew each time, they cost their allocation and clearing on every slider step).
+    op_scratch: Option<([u32; 2], [wgpu::Texture; 2])>,
 }
 
 fn tex_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
@@ -796,6 +799,7 @@ impl Compositor {
             op_kit: None,
             op_made: HashMap::new(),
             frame_ops: Vec::new(),
+            op_scratch: None,
         }
         .with_texture_limit(device.limits().max_texture_dimension_2d)
     }
@@ -822,6 +826,7 @@ impl Compositor {
         self.residents.clear();
         self.fx.clear();
         self.temps.clear();
+        self.op_scratch = None;
         self.prefix.clear();
     }
 
@@ -1195,6 +1200,7 @@ impl Compositor {
         self.prefix.clear();
         self.residents.clear();
         self.op_made.clear();
+        self.op_scratch = None;
         self.fx.clear();
         self.patterns.clear();
         self.temps.clear();
@@ -1903,8 +1909,13 @@ impl Compositor {
         } else {
             // 8-bit sources as 8-bit texels: exact, and a quarter of the upload.
             let eight = operator::source_is_8bit(blur.depth);
-            let (format, kind, bpp) = if eight { (wgpu::TextureFormat::Rgba8Unorm, TexKind::Rgba8, 4) } else { (wgpu::TextureFormat::Rgba32Float, TexKind::Rgba32F, 16) };
-            let source_desc = wgpu::TextureDescriptor { format, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, ..desc("pc_operator_source", window) };
+            let (format, kind, bpp) =
+                if eight { (wgpu::TextureFormat::Rgba8Unorm, TexKind::Rgba8, 4) } else { (wgpu::TextureFormat::Rgba32Float, TexKind::Rgba32F, 16) };
+            let source_desc = wgpu::TextureDescriptor {
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                ..desc("pc_operator_source", window)
+            };
             let size = u64::from(window.width()) * u64::from(window.height()) * bpp;
             let texture = self.create_layer_texture(device, &source_desc, wk, size, stats)?;
             let texels = operator::read_window(surface, window, blur.extent);
@@ -1953,7 +1964,17 @@ impl Compositor {
                 self.layer_alloc = Some("GPU layer operators are unavailable on this device".into());
                 return None;
             }
-            let out = self.create_layer_texture(device, &desc("pc_operator_output", region), ok, bytes(region), stats)?;
+            // The output page of an unchanged region is written again in place.
+            let out = match self.residents.get(&ok).filter(|r| r.region == region && r.kind == TexKind::Rgba32F) {
+                Some(r) => r.texture.clone(),
+                None => self.create_layer_texture(device, &desc("pc_operator_output", region), ok, bytes(region), stats)?,
+            };
+            let size = [window.width(), window.height()];
+            if self.op_scratch.as_ref().is_none_or(|(s, _)| s[0] < size[0] || s[1] < size[1]) {
+                let grown = self.op_scratch.as_ref().map_or(size, |(s, _)| [s[0].max(size[0]), s[1].max(size[1])]);
+                let make = |label| operator::float_texture(device, label, grown[0], grown[1]);
+                self.op_scratch = Some((grown, [make("pc_operator_a"), make("pc_operator_b")]));
+            }
             let Some(source) = self.residents.get(&wk).map(|r| r.texture.clone()) else {
                 // Evicted making room for the output: the refresh goes to the CPU.
                 self.layer_alloc = Some(OVER_BUDGET.into());
@@ -1963,8 +1984,8 @@ impl Compositor {
                 let r = self.residents.get(&mk)?;
                 Some((sr.translate(-region.x0, -region.y0), r.texture.create_view(&Default::default())))
             });
-            let Some(Some(kit)) = self.op_kit.as_ref() else { return None };
-            let blurred = operator::record_blur(device, encoder, kit, &blur.blur, &source, [window.width(), window.height()])?;
+            let (Some(Some(kit)), Some((_, scratch))) = (self.op_kit.as_ref(), self.op_scratch.as_ref()) else { return None };
+            let blurred = operator::record_blur(device, encoder, kit, &blur.blur, &source, size, scratch)?;
             let fmt = surface.format();
             operator::record_finish(
                 device,
