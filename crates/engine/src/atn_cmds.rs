@@ -3092,17 +3092,27 @@ fn camera_raw_from(d: &Descriptor) -> Mapped {
     if !custom_wb || CALIBRATION.iter().any(|k| active(k, 0.0)) || NEUTRAL_ONLY.iter().any(|(k, n)| active(k, *n)) {
         return Mapped::Unsupported { harmless: false };
     }
+    // A value that is recorded but isn't a number can't replay: `fields_from` and `nums` would
+    // drop it (or read it as 0) and play a different look.
+    let unreadable = |k: &str| d.get(k).is_some() && get_num(d, k).is_none();
+    let grouped = ["HA_", "SA_", "LA_"].iter().flat_map(|p| ["R", "O", "Y", "G", "A", "B", "P", "M"].map(|c| format!("{p}{c}")));
+    let grades = ["STSH", "STSS", "CgSL", "CgMH", "CgMS", "CgML", "STHH", "STHS", "CgHL", "CgGH", "CgGS", "CgGL", "PC_1", "PC_2", "PC_3", "PCVS"];
+    if CAMERA_RAW.iter().any(|F(k, ..)| unreadable(k)) || grouped.into_iter().any(|k| unreadable(&k)) || grades.iter().any(|k| unreadable(k)) {
+        return Mapped::Unsupported { harmless: false };
+    }
     let Some(mut m) = fields_from(d, CAMERA_RAW) else { return Mapped::Unsupported { harmless: false } };
     let nums = |keys: &[&str]| -> Option<Vec<Value>> {
         let v: Vec<Option<f64>> = keys.iter().map(|k| get_num(d, k)).collect();
         // Absent members keep the command's defaults only when the whole group is absent.
         if v.iter().all(Option::is_none) { None } else { Some(v.into_iter().map(|n| Value::from(n.unwrap_or(0.0))).collect()) }
     };
-    // The splits are one setting: all three, or none (the defaults); a partial set can't replay.
+    // The splits are one setting: all three, or none (the defaults); a partial set can't replay,
+    // nor can splits outside 0..=100 or out of order, which would build a different curve.
     match (get_num(d, "PC_1"), get_num(d, "PC_2"), get_num(d, "PC_3")) {
-        (Some(a), Some(b), Some(c)) => {
+        (Some(a), Some(b), Some(c)) if (0.0..=100.0).contains(&a) && a < b && b < c && c <= 100.0 => {
             m.insert("curveSplits".into(), json!([a, b, c]));
         }
+        (Some(_), Some(_), Some(_)) => return Mapped::Unsupported { harmless: false },
         _ if ["PC_1", "PC_2", "PC_3"].iter().any(|k| d.get(k).is_some()) => return Mapped::Unsupported { harmless: false },
         _ => {}
     }
@@ -3138,7 +3148,10 @@ fn camera_raw_from(d: &Descriptor) -> Mapped {
         }
         let Some(list) = get_list(d, key) else { return Mapped::Unsupported { harmless: false } };
         let Some(flat) = list.iter().map(num).collect::<Option<Vec<f64>>>() else { return Mapped::Unsupported { harmless: false } };
-        if flat.len() % 2 != 0 {
+        // Odd lengths, and curves `filter.cameraRaw` refuses (one point, out of range, inputs not
+        // increasing), stay Photoshop steps rather than failing on playback.
+        let points: Vec<[f32; 2]> = flat.as_chunks::<2>().0.iter().map(|[a, b]| [*a as f32, *b as f32]).collect();
+        if flat.len() % 2 != 0 || photocraft_algo::camera_raw::validate_curve(&points).is_err() {
             return Mapped::Unsupported { harmless: false };
         }
         let identity = flat == [0.0, 0.0, 255.0, 255.0];

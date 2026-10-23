@@ -2749,6 +2749,14 @@ fn camera_raw_filter_steps_import_as_filter_camera_raw() {
     let auto_wb = desc("null").with("WBal", enm("WBal", "Atmt")).with("Temp", int(5));
     let partial_splits = desc("null").with("PC_1", int(20));
     let odd_curve = desc("null").with("Crv ", int(3));
+    // Review of #8714: values that would replay differently, or fail to play, stay Photoshop steps.
+    let reversed_splits = desc("null").with("PC_1", int(80)).with("PC_2", int(50)).with("PC_3", int(20));
+    let split_past_100 = desc("null").with("PC_1", int(20)).with("PC_2", int(50)).with("PC_3", int(120));
+    let one_point_curve = desc("null").with("Crv ", D::List([0, 0].map(int).to_vec()));
+    let unordered_curve = desc("null").with("CrvG", D::List([0, 0, 128, 90, 64, 50, 255, 255].map(int).to_vec()));
+    let text_contrast = desc("null").with("Cr12", D::Text(UnicodeString::new_nul("ten")));
+    let text_hue = desc("null").with("HA_R", D::Text(UnicodeString::new_nul("red")));
+    let text_grade = desc("null").with("STSH", D::Text(UnicodeString::new_nul("blue")));
     let items = vec![
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(d)),
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(calibrated)),
@@ -2756,6 +2764,13 @@ fn camera_raw_filter_steps_import_as_filter_camera_raw() {
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(auto_wb)),
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(partial_splits)),
         item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(odd_curve)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(reversed_splits)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(split_past_100)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(one_point_curve)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(unordered_curve)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(text_contrast)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(text_hue)),
+        item("Adobe Camera Raw Filter", "Camera Raw Filter", Some(text_grade)),
     ];
     let file = AtnFile {
         name: UnicodeString::new_nul("Looks"),
@@ -2781,7 +2796,7 @@ fn camera_raw_filter_steps_import_as_filter_camera_raw() {
     for (k, (id, _)) in steps.iter().enumerate().skip(1) {
         assert_eq!(id, PHOTOSHOP_STEP, "step {k}");
     }
-    assert_eq!(imp.unsupported.iter().map(|u| u.step).collect::<Vec<_>>(), [1, 2, 3, 4, 5]);
+    assert_eq!(imp.unsupported.iter().map(|u| u.step).collect::<Vec<_>>(), (1..=12).collect::<Vec<_>>());
     // The imported step plays.
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 16, "height": 12})).unwrap();
