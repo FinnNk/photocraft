@@ -725,6 +725,59 @@ mod tests {
     }
 
     #[test]
+    fn doc_export_layers_reports_skips_in_workspace_and_trusted_sessions() {
+        for trusted in [false, true] {
+            let base = std::env::temp_dir().join(format!("pc-export-skips-{}-{trusted}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(&base).unwrap();
+            let mut h =
+                if trusted { Headless::trusted_local() } else { Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&base), Some(&base)).unwrap()) };
+            h.handle("doc.new", json!({"width": 4, "height": 4, "background": "white", "name": "card"})).unwrap();
+            let adjustment = h.handle("engine.execute", json!({"command": "layer.newAdjustmentLayer.levels"})).unwrap()["layer"].clone();
+            h.handle("engine.execute", json!({"command": "layer.setProps", "params": {"name": "Levels"}})).unwrap();
+            let hidden = h.handle("engine.execute", json!({"command": "layer.new.layer", "params": {"name": "Hidden"}})).unwrap()["layer"].clone();
+            h.handle("engine.execute", json!({"command": "layer.setProps", "params": {"visible": false}})).unwrap();
+            // Exercise the actual JSON-lines serve envelope, not only direct dispatch.
+            let h = Mutex::new(h);
+            let out_dir = base.join("out").to_string_lossy().into_owned();
+            let request = json!({"id": 8491, "method": "doc.exportLayers", "params": {"dir": out_dir}}).to_string() + "\n";
+            let mut output = Vec::new();
+            serve_lines(&h, request.as_bytes(), &mut output).unwrap();
+            let reply: Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(reply["id"], 8491);
+            assert_eq!(reply["ok"], true, "{reply}");
+            assert_eq!(reply["result"]["files"], json!([format!("{out_dir}/card_0001_Background.png")]));
+            if !trusted {
+                assert_eq!(reply["result"]["count"], 1);
+            }
+            assert_eq!(
+                reply["result"]["skipped"],
+                json!([
+                    {"layer": hidden, "name": "Hidden", "reason": "hidden by visibleOnly"},
+                    {"layer": adjustment, "name": "Levels", "reason": "adjustment layer has no pixels of its own"}
+                ])
+            );
+            assert_eq!(std::fs::read_dir(base.join("out")).unwrap().count(), 1);
+            let mut h = h.into_inner().unwrap();
+            let all_dir = base.join("all").to_string_lossy().into_owned();
+            let all = h.export_layers(None, &all_dir, &json!({"visibleOnly": false})).unwrap();
+            assert_eq!(all["files"].as_array().unwrap().len(), 2);
+            assert_eq!(all["skipped"].as_array().unwrap().len(), 1);
+            // Workspace no-overwrite errors still fail and remove only newly created files.
+            if !trusted {
+                let collision = base.join("collision");
+                std::fs::create_dir_all(&collision).unwrap();
+                std::fs::write(collision.join("card_0002_Background.png"), b"keep").unwrap();
+                assert!(h.export_layers(None, &collision.to_string_lossy(), &json!({"visibleOnly": false})).is_err());
+                assert_eq!(std::fs::read_dir(&collision).unwrap().count(), 1);
+                assert_eq!(std::fs::read(collision.join("card_0002_Background.png")).unwrap(), b"keep");
+            }
+            drop(h);
+            std::fs::remove_dir_all(base).unwrap();
+        }
+    }
+
+    #[test]
     fn doc_export_layers_writes_only_beneath_the_write_root() {
         let base = std::env::temp_dir().join(format!("pc-doc-export-layers-{}", std::process::id()));
         let root = base.join("workspace");
@@ -831,6 +884,142 @@ mod tests {
         assert_eq!(h.session.documents()[0].doc.layer_count(), 1, "nothing was placed into the active document");
         assert_eq!(h.session.documents()[1].doc.layer_count(), 2, "the placed layer is in document 1");
         assert_eq!(std::fs::read_dir(root.join("sets")).unwrap().count(), 2, "document 1's data sets were exported");
+        // Release directory capabilities before cleanup on Windows.
+        drop(h);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn doc_export_data_sets_judges_pixel_replacement_paths_like_apply() {
+        let base = std::env::temp_dir().join(format!("pc-doc-data-set-pixels-{}", std::process::id()));
+        let root = base.join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let red = photocraft_codecs::Image::from_u8(4, 4, photocraft_codecs::ChannelLayout::Rgb, [255, 0, 0].repeat(16)).unwrap();
+        let photo = base.join("photo.png");
+        std::fs::write(&photo, photocraft_codecs::encode(&red, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
+        let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        h.handle("doc.new", json!({"width": 8, "height": 8, "background": "white", "name": "card"})).unwrap();
+        let layer = h.handle("engine.execute", json!({"command": "layer.new.layer", "params": {}})).unwrap()["layer"].clone();
+        h.handle(
+            "engine.execute",
+            json!({"command": "image.variables.define", "params": {"defs": [{"name": "photo", "layer": layer, "type": "pixelReplacement"}]}}),
+        )
+        .unwrap();
+        // Storing the path is allowed; reading it is what the gate judges.
+        h.handle(
+            "engine.execute",
+            json!({"command": "image.variables.dataSets", "params": {"dataSets": [
+                {"name": "swap", "values": [{"variable": "photo", "kind": "pixels", "value": photo.to_string_lossy()}]},
+            ]}}),
+        )
+        .unwrap();
+        let applied = h.handle("engine.execute", json!({"command": "image.applyDataSet", "params": {"name": "swap"}})).unwrap_err().to_string();
+        assert!(applied.contains("ambient filesystem paths"), "{applied}");
+        let sets = root.join("sets");
+        let exported = h.handle("doc.exportDataSets", json!({"dir": sets.to_string_lossy(), "format": "png"})).unwrap_err().to_string();
+        assert!(exported.contains("ambient filesystem paths"), "{exported}");
+        assert_eq!(std::fs::read_dir(&sets).map_or(0, Iterator::count), 0, "nothing of the refused batch is written");
+        // Release directory capabilities before cleanup on Windows.
+        drop(h);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn workspace_psd_saves_embed_no_file_a_linked_smart_object_names() {
+        use photocraft_engine::doc::{LayerContent, SmartSource};
+
+        const MARKER: &[u8] = b"PHOTOCRAFT-LINKED-0001";
+        let has_marker = |bytes: &[u8]| bytes.windows(MARKER.len()).any(|w| w == MARKER);
+        let base = std::env::temp_dir().join(format!("pc-psd-linked-embed-{}", std::process::id()));
+        let root = base.join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let outside = base.join("outside.txt");
+        std::fs::write(&outside, MARKER).unwrap();
+        // A document whose smart object names a file outside the roots as its source.
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let state = session.active_mut().unwrap();
+        let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+        smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
+        std::fs::write(root.join("in.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
+        // A trusted export embeds the linked file, as before.
+        assert!(has_marker(&photocraft_io::export(&state.doc, "psd", &Default::default()).unwrap().bytes));
+
+        let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        h.handle("doc.open", json!({"path": "in.pcraft"})).unwrap();
+        let saved = h.handle("doc.save", json!({"path": "out.psd"})).unwrap();
+        let warnings = saved["warnings"].to_string();
+        assert!(warnings.contains("written as pixels"), "{warnings}");
+        assert!(!has_marker(&std::fs::read(root.join("out.psd")).unwrap()), "the linked file outside the roots is not embedded");
+        // Release directory capabilities before cleanup on Windows.
+        drop(h);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn allowed_filters_do_not_rerender_a_smart_object_from_its_linked_file() {
+        use photocraft_engine::doc::{LayerContent, SmartSource};
+
+        let base = std::env::temp_dir().join(format!("pc-linked-rerender-{}", std::process::id()));
+        let root = base.join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let red = photocraft_codecs::Image::from_u8(8, 8, photocraft_codecs::ChannelLayout::Rgb, [255, 0, 0].repeat(64)).unwrap();
+        let outside = base.join("red.png");
+        std::fs::write(&outside, photocraft_codecs::encode(&red, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
+        // A document whose white smart object names a file outside the roots as its source.
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let state = session.active_mut().unwrap();
+        let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+        smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
+        std::fs::write(root.join("p.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
+
+        let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        h.handle("doc.open", json!({"path": "p.pcraft"})).unwrap();
+        h.handle("engine.execute", json!({"command": "filter.blur.gaussianBlur", "params": {"radius": 0.5}})).unwrap();
+        let doc = &h.session.active().unwrap().doc;
+        let LayerContent::Smart(smart) = &doc.layers[0].content else { panic!("smart object") };
+        assert_eq!(smart.smart_filters.len(), 1, "the filter is still recorded");
+        assert_eq!(smart.cache.as_ref().unwrap().rgba(4, 4), [1.0, 1.0, 1.0, 1.0], "the linked file outside the roots is not read");
+        // Release directory capabilities before cleanup on Windows.
+        drop(h);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn workspace_layer_exports_keep_linked_smart_objects_as_pixels() {
+        use photocraft_engine::doc::{LayerContent, SmartSource};
+
+        const MARKER: &[u8] = b"PHOTOCRAFT-LINKED-0002";
+        let has_marker = |bytes: &[u8]| bytes.windows(MARKER.len()).any(|w| w == MARKER);
+        let base = std::env::temp_dir().join(format!("pc-export-layers-linked-{}", std::process::id()));
+        let root = base.join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let outside = base.join("outside.txt");
+        std::fs::write(&outside, MARKER).unwrap();
+        // A document whose smart object names a file outside the roots as its source.
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let state = session.active_mut().unwrap();
+        let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+        smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
+        std::fs::write(root.join("in.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
+
+        let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        h.handle("doc.open", json!({"path": "in.pcraft"})).unwrap();
+        let out = root.join("layers");
+        for format in ["psd", "psb"] {
+            let exported = h.handle("doc.exportLayers", json!({"dir": out.to_string_lossy(), "format": format})).unwrap();
+            assert_eq!(exported["count"], 1, "{exported}");
+        }
+        let files: Vec<_> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).collect();
+        assert_eq!(files.len(), 2, "{files:?}");
+        for file in files {
+            assert!(!has_marker(&std::fs::read(&file).unwrap()), "{} embeds no file outside the roots", file.display());
+        }
         // Release directory capabilities before cleanup on Windows.
         drop(h);
         std::fs::remove_dir_all(base).unwrap();
