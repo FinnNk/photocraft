@@ -554,10 +554,23 @@ pub fn replace_text(t: &mut TextLayer, a: usize, b: usize, new: &str) {
     fn adjust<S: Clone + PartialEq>(runs: Vec<(usize, S)>, a: usize, b: usize, ins: usize, trailing_paragraph: bool) -> Vec<(usize, S)> {
         let mut out: Vec<(usize, S)> = Vec::new();
         let mut at = 0;
+        // Paragraph runs only: the non-empty paragraph that starts exactly at an insertion point.
+        let starts_here = || {
+            let mut s = 0;
+            runs.iter().position(|r| {
+                let here = s == a && r.0 > 0;
+                s += r.0;
+                here
+            })
+        };
         let host = if trailing_paragraph && a == b && runs.last().is_some_and(|r| r.0 == 0) && a == runs.iter().map(|r| r.0).sum::<usize>() {
             // Inserted text belongs to a styled final empty paragraph, not to
             // the preceding paragraph whose break ends at this byte offset.
             runs.len() - 1
+        } else if let Some(next) = (trailing_paragraph && a == b && a > 0).then(starts_here).flatten() {
+            // Text inserted at the start of a paragraph belongs to that paragraph, not to the one
+            // whose break ends there (#8489).
+            next
         } else {
             runs.iter()
                 .scan(0, |acc, r| {
@@ -1725,6 +1738,28 @@ mod tests {
         assert_eq!(runs(&s, id).iter().map(|r| r.0).sum::<usize>(), 5);
         s.execute("type.edit", json!({"layer": id, "text": ""})).unwrap();
         assert_eq!(text_layer(&s, id).text, "");
+
+        // Text inserted at the start of a paragraph joins that paragraph, which keeps its style.
+        let id = s
+            .execute(
+                "type.create",
+                json!({"x": 20, "y": 50, "text": "a
+b", "size": 20}),
+            )
+            .unwrap()["layer"]
+            .as_u64()
+            .unwrap();
+        s.execute("type.setStyle", json!({"layer": id, "range": [2, 3], "align": "right"})).unwrap();
+        s.execute(
+            "type.edit",
+            json!({"layer": id, "text": "a
+Xb"}),
+        )
+        .unwrap();
+        let paragraphs: Vec<(usize, photocraft_doc::text::TextAlign)> =
+            text_layer(&s, id).paragraph_runs().into_iter().map(|r| (r.len, r.style.align)).collect();
+        assert_eq!(paragraphs.first().map(|p| p.0), Some(2), "{paragraphs:?}");
+        assert_eq!(paragraphs.get(1).copied(), Some((2, photocraft_doc::text::TextAlign::Right)), "{paragraphs:?}");
     }
 
     /// #206: `type.edit {"kerning"}` over a range takes a number (manual, 1/1000 em) or a mode.
