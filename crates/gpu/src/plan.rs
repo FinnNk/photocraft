@@ -1016,7 +1016,7 @@ impl<'a> Planner<'a> {
         }
         let mut p = Pass::new(Kernel::Adjust, 0);
         p.a = Some(src);
-        let (kind, params, lut) = adjustment_program(adj, self.cx.transfer, self.cx.depth);
+        let (kind, params, lut) = adjustment_program(adj, self.cx.transfer, self.cx.depth, self.cx.mode);
         p.adjust_kind = kind;
         p.params = params;
         p.lut = lut;
@@ -1645,7 +1645,7 @@ fn transfer_exponent(t: Transfer) -> f32 {
 }
 
 /// Adjustment → (kernel kind, parameters, LUT rows). Kinds are the `switch` in `adjust()`.
-pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraft_color::SampleType) -> Program {
+pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraft_color::SampleType, mode: photocraft_color::ColorMode) -> Program {
     let mut p = [[0.0f32; 4]; 4];
     match adj {
         Adjustment::Invert => (1, p, None),
@@ -1701,7 +1701,7 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
                 *v = if identity { 1.0 } else { 0.0 };
             }
             // p0.w: continue the curve past 0..1 (32-bit RGB Curves, #7157).
-            p[0][3] = if adjust::float_tone_extrapolates(adj, Some(depth)) { 1.0 } else { 0.0 };
+            p[0][3] = if adjust::float_tone_extrapolates(adj, Some(depth), mode) { 1.0 } else { 0.0 };
             (7, p, Some(adjust::tone_luts_depth(adj, Some(depth)).iter().take(3).map(|t| to_row(t)).collect()))
         }
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
@@ -1970,7 +1970,7 @@ mod tests {
     fn color_lookup_with_an_overflowing_stored_size_uploads_no_table() {
         for size in [1 << 22, u32::MAX] {
             let a = Adjustment::ColorLookup { name: "x".into(), lut: Some(std::sync::Arc::new(vec![0.5; 24])), size, tetrahedral: false, dither: false };
-            let (kind, _, rows) = adjustment_program(&a, Transfer::Srgb, SampleType::U8);
+            let (kind, _, rows) = adjustment_program(&a, Transfer::Srgb, SampleType::U8, photocraft_color::ColorMode::Rgb);
             assert_eq!((kind, rows.is_none()), (0, true), "size {size}");
         }
     }

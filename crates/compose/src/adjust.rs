@@ -77,6 +77,12 @@ pub fn apply_with(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer) {
 /// unrounded). Integer depths work on whole levels like Photoshop's (see [`levels_q`] and
 /// `adjustment_quantum`), 32-bit documents get its float Levels (see [`levels_float`]).
 pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: Option<SampleType>) {
+    apply_depth_mode(adj, buf, transfer, depth, ColorMode::Rgb);
+}
+
+/// [`apply_depth`] in a document of colour `mode` (which decides whether float curves extend,
+/// see [`float_tone_extrapolates`]).
+fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: Option<SampleType>, mode: ColorMode) {
     match adj {
         Adjustment::Invert => map_rgb(buf, |c| [1.0 - c[0], 1.0 - c[1], 1.0 - c[2]]),
         Adjustment::Threshold { level } => map_rgb(buf, |c| [if threshold_white(c, *level, depth) { 1.0 } else { 0.0 }; 3]),
@@ -143,7 +149,7 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
                 return;
             }
             let luts = tone_luts_depth(adj, depth);
-            apply_tone(buf, *space, &luts, identity, float_tone_extrapolates(adj, depth));
+            apply_tone(buf, *space, &luts, identity, float_tone_extrapolates(adj, depth, mode));
         }
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
             let table = (!*colorize && ranges.iter().any(|r| !r.is_neutral())).then(|| hue_range_tables(ranges));
@@ -335,7 +341,7 @@ pub fn apply_in(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: O
             });
         }
     } else {
-        apply_depth(adj, buf, transfer, depth);
+        apply_depth_mode(adj, buf, transfer, depth, mode);
     }
 }
 
@@ -576,9 +582,10 @@ pub fn float_tone_identity(adj: &Adjustment, depth: Option<SampleType>) -> [bool
 
 /// Whether an edited Curves adjustment continues past 0..1 instead of clipping: in a 32-bit RGB
 /// document Photoshop extends each curve beyond its end points along the slope of its end
-/// segments (#7157: `[[0,0],[255,128]]` maps -0.5 to -0.250980407 and 2 to 1.003921628).
-pub fn float_tone_extrapolates(adj: &Adjustment, depth: Option<SampleType>) -> bool {
-    matches!(adj, Adjustment::Curves { space: ToneSpace::Rgb, .. }) && depth == Some(SampleType::F32)
+/// segments (#7157: `[[0,0],[255,128]]` maps -0.5 to -0.250980407 and 2 to 1.003921628). Only
+/// in RGB documents: the curve's space is not the document's, and other modes keep the table.
+pub fn float_tone_extrapolates(adj: &Adjustment, depth: Option<SampleType>, mode: ColorMode) -> bool {
+    matches!(adj, Adjustment::Curves { space: ToneSpace::Rgb, .. }) && depth == Some(SampleType::F32) && mode == ColorMode::Rgb
 }
 
 pub(crate) fn apply_tone(buf: &mut Buffer, space: ToneSpace, luts: &[Vec<f32>; 4], identity: [bool; 3], extrapolate: bool) {

@@ -2798,6 +2798,13 @@ fn float_curves_extend_past_the_unit_range_like_photoshop() {
         adjust::apply_depth(&adj, &mut clipped, adjust::Transfer::for_document(ColorMode::Rgb, depth), Some(depth));
         assert!(clipped.px[2][..3].iter().all(|v| *v <= 128.0 / 255.0 + 1e-4), "{depth:?}: {:?}", clipped.px[2]);
     }
+    // Only in RGB documents: a 32-bit grayscale document keeps the table's end.
+    let mut gray = input.clone();
+    adjust::apply_in(&adj, &mut gray, adjust::Transfer::Gamma(1.0), Some(SampleType::F32), ColorMode::Grayscale);
+    assert!(gray.px[2][..3].iter().all(|v| *v <= 128.0 / 255.0 + 1e-4), "grayscale: {:?}", gray.px[2]);
+    let mut rgb = input.clone();
+    adjust::apply_in(&adj, &mut rgb, adjust::Transfer::Gamma(1.0), Some(SampleType::F32), ColorMode::Rgb);
+    check(&rgb, "apply_in in RGB");
     // Infinite samples don't become NaN on the way out.
     let mut odd = Buffer { rect: Rect::new(0, 0, 1, 1), px: vec![[f32::INFINITY, f32::NEG_INFINITY, 0.5, 1.0]] };
     adjust::apply_depth(&adj, &mut odd, adjust::Transfer::Gamma(1.0), Some(SampleType::F32));
