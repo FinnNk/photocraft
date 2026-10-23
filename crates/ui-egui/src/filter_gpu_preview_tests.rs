@@ -76,7 +76,16 @@ fn settle(h: &mut Harness<'static, PhotocraftApp>, done: impl Fn(&mut Photocraft
 /// Document points along stripe edges (where a blur shows) that the view shows, away from the
 /// dialog, and the canvas pixels there.
 fn probes(h: &mut Harness<'static, PhotocraftApp>) -> Vec<((i32, i32), [u8; 4])> {
+    probes_named(h, None)
+}
+
+/// [`probes`], saving the frame as `name` under `PHOTOCRAFT_PREVIEW_FRAMES` when that is set.
+fn probes_named(h: &mut Harness<'static, PhotocraftApp>, name: Option<&str>) -> Vec<((i32, i32), [u8; 4])> {
     let image = h.render().unwrap();
+    if let (Some(dir), Some(name)) = (std::env::var_os("PHOTOCRAFT_PREVIEW_FRAMES"), name) {
+        let file: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+        image.save(std::path::Path::new(&dir).join(format!("gpu-preview-{file}.png"))).unwrap();
+    }
     let xf = ViewXform::active(h.state()).unwrap();
     let canvas = h.state().last_canvas_rect;
     // Floating windows (the dialog) cover part of the canvas.
@@ -126,7 +135,7 @@ fn within(range: &[(u8, u8); 3], px: [u8; 4]) -> bool {
 /// Every probe the canvas shows matches the CPU preview of `radius` (within display rounding),
 /// and enough probes were checked to mean something.
 fn assert_shows(h: &mut Harness<'static, PhotocraftApp>, radius: Option<f64>, what: &str) {
-    let shown = probes(h);
+    let shown = probes_named(h, Some(what));
     let mut checked = 0;
     for (p, px) in &shown {
         let (want, alpha) = expected(h.state(), radius, *p);
