@@ -851,6 +851,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                 Some(p) if result.is_ok() && running => p.committing = true,
                 _ => app.filter_preview = None,
             }
+            // The GPU preview likewise (`filter_gpu_preview`).
+            let running = result.is_ok() && app.session.active().is_some_and(|st| app.session.job_on(st.doc.id).is_some());
+            crate::filter_gpu_preview::confirmed(app, running);
             if result.is_ok() && cmd == "view.newGuideLayout" {
                 app.ui.view.guide_layout = params;
             }

@@ -574,3 +574,17 @@ title = "Filter dialog preview window texture at k 1, 36 MP"
 issue = 5772
 bench = "interactive_bench"
 row = "filter preview window texture, k 1"
+
+[[scenario]]
+id = "P66"
+title = "Gaussian Blur dialog slider step r 40, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Gaussian Blur dialog preview r 40 (GPU resident)"
+
+[[scenario]]
+id = "P67"
+title = "Gaussian Blur dialog slider step r 250, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Gaussian Blur dialog preview r 250 (GPU resident)"

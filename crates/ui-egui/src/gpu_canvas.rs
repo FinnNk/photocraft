@@ -507,6 +507,10 @@ impl GpuCanvas {
         if let Some(e) = &res.compositor_failed {
             return Err(e.clone());
         }
+        #[cfg(test)]
+        if res.fail_operators && res.operators.contains_key(&doc.id) {
+            return Err(photocraft_gpu::Unsupported("injected operator failure".into()));
+        }
         let mut comp = match res.compositor.take() {
             Some(c) => c,
             None => match photocraft_gpu::Compositor::try_new_with_format(device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter)) {
@@ -528,6 +532,7 @@ impl GpuCanvas {
             comp.set_composite_cache_budget(b);
         }
         comp.set_focus(res.compositor_focus);
+        comp.set_operators(doc.id, res.operators.get(&doc.id).cloned().unwrap_or_default());
         let key = doc.id.0;
         let format = self.format_for(doc.depth, size);
         let fresh = res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format);
@@ -693,6 +698,10 @@ impl GpuCanvas {
             }
             Err(e) => out.fallback = Some(e.0),
         }
+        if self.has_operators(doc.id) {
+            out.kind = REFRESH_OPERATOR_FAILED;
+            return out;
+        }
         let px = region.width() as u64 * region.height() as u64;
         if defer && px >= DEFER_PX && self.prepare_texture(key, doc).is_some() {
             out.kind = REFRESH_DEFERRED;
@@ -787,6 +796,8 @@ impl GpuCanvas {
         if let Some(c) = res.compositor.as_mut() {
             c.retain_docs(|d| live.contains(&d.0));
         }
+        // A closed document's layer operators (a filter preview open when it closed) go too.
+        res.operators.retain(|d, _| live.contains(&d.0));
         // LUTs and identity-transform signatures can outlive document textures. Prune both,
         // or a preserved-ID reopen can skip rebuilding a missing LUT.
         res.luts.retain(|k, _| live.contains(&k.0));
@@ -899,6 +910,57 @@ impl GpuCanvas {
             }
         }
         Some((d.format, d.size, out))
+    }
+
+    /// Layer operators for document `doc` (`photocraft_gpu::LayerOperator`): its composites show
+    /// them from the next refresh on; an empty list clears them. While a document has operators,
+    /// a refresh the wgpu compositor can't draw draws nothing ([`REFRESH_OPERATOR_FAILED`]).
+    pub fn set_operators(&self, doc: photocraft_doc::DocId, operators: Vec<photocraft_gpu::LayerOperator>) {
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
+        if operators.is_empty() {
+            res.operators.remove(&doc);
+        } else {
+            res.operators.insert(doc, operators);
+        }
+    }
+
+    /// Tests: make composites of documents with operators fail.
+    #[cfg(test)]
+    pub(crate) fn fail_operators(&self, on: bool) {
+        if let Some(res) = self.rs.renderer.write().callback_resources.get_mut::<Resources>() {
+            res.fail_operators = on;
+        }
+    }
+
+    /// Whether document `doc` has layer operators.
+    pub fn has_operators(&self, doc: photocraft_doc::DocId) -> bool {
+        let renderer = self.rs.renderer.read();
+        renderer.callback_resources.get::<Resources>().is_some_and(|res| res.operators.contains_key(&doc))
+    }
+
+    /// Whether the wgpu compositor can run layer operators on this device (it builds their
+    /// pipelines the first time, so a dialog can warm them as it opens).
+    pub fn operators_supported(&self) -> bool {
+        if std::env::var_os("PHOTOCRAFT_CPU_COMPOSE").is_some() || self.fault().is_some() {
+            return false;
+        }
+        let device = &self.rs.device;
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
+        if res.compositor_failed.is_some() {
+            return false;
+        }
+        if res.compositor.is_none() {
+            match photocraft_gpu::Compositor::try_new_with_format(device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter)) {
+                Ok(c) => res.compositor = Some(c),
+                Err(e) => {
+                    res.compositor_failed = Some(e);
+                    return false;
+                }
+            }
+        }
+        res.compositor.as_mut().is_some_and(|c| c.operators_supported(device))
     }
 
     /// Add the paint callback drawing `params` into `rect` (clipped by the painter's clip rect).
@@ -1502,6 +1564,11 @@ pub const OVER_CANVAS_BUDGET: &str = "the canvas exceeds the GPU texture budget;
 /// was created, and the caller draws the CPU canvas instead.
 pub const REFRESH_OVER_BUDGET: &str = "over-budget";
 
+/// [`Refresh::kind`] when the wgpu compositor couldn't draw a document with layer operators
+/// ([`GpuCanvas::set_operators`]): nothing was drawn, since the CPU compositor would show the
+/// layers without them. The caller previews on the CPU instead.
+pub const REFRESH_OPERATOR_FAILED: &str = "operator-failed";
+
 /// [`Refresh::kind`] of a CPU refresh left to the caller ([`GpuCanvas::refresh_with`]).
 pub const REFRESH_DEFERRED: &str = "deferred";
 
@@ -1675,6 +1742,12 @@ struct Resources {
     layer_fit: Option<LayerFit>,
     compositor_cache_budget: Option<u64>,
     compositor_focus: Option<photocraft_geom::Rect>,
+    /// Layer operators per document, handed to the compositor before each composite
+    /// ([`GpuCanvas::set_operators`]).
+    operators: HashMap<photocraft_doc::DocId, Vec<photocraft_gpu::LayerOperator>>,
+    /// Tests: composites of documents with operators fail, as a fault or full memory would.
+    #[cfg(test)]
+    fail_operators: bool,
     /// GPU bytes one document's display texture set may take (see [`canvas_budget`]).
     canvas_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
     encode_bgl: wgpu::BindGroupLayout,
@@ -2002,6 +2075,9 @@ impl Resources {
             layer_fit: None,
             compositor_cache_budget: None,
             compositor_focus: None,
+            operators: HashMap::new(),
+            #[cfg(test)]
+            fail_operators: false,
             canvas_budget: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(canvas_budget(physical_memory(), None))),
             encode_bgl,
             encode_pipeline,
