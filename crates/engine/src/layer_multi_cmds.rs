@@ -159,7 +159,10 @@ fn recorded_move(s: &Session, mut p: Value, pre_selected: Option<&[LayerId]>) ->
     }
     let Some(id) = p.get("target").and_then(Value::as_u64).map(LayerId) else { return p };
     let Some(layer) = st.doc.layer(id) else { return p };
-    let matches = same_named_targets(&st.doc, &layer.name, moved.as_slice());
+    // A copy leaves its source where it is (it may even land beside it), so nothing is left out.
+    let copy = p.get("copy").and_then(Value::as_bool).unwrap_or(false);
+    let skip = if copy { None } else { moved };
+    let matches = same_named_targets(&st.doc, &layer.name, skip.as_slice());
     let Some(occurrence) = matches.iter().position(|candidate| *candidate == id) else { return p };
     if let Some(fields) = p.as_object_mut() {
         fields.insert("target".into(), json!(layer.name));
@@ -1370,7 +1373,8 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         vec![crate::commands::layer_param(s, p)?]
     };
-    let target = move_target(s, p, &requested)?;
+    // A copy moves nothing, so its source stays a candidate (⌥-dragging a layer beside itself).
+    let target = move_target(s, p, if copy { &[] } else { &requested })?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = &st.doc;
     let target_path = doc.path_of(target).ok_or(EngineError::NoLayer(target))?;

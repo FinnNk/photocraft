@@ -1272,6 +1272,23 @@ mod tests {
         m.execute("layer.moveTo", json!({"layers": [a.0, b.0], "target": "Twin", "position": "above"})).unwrap();
         assert_eq!(m.active().unwrap().doc.layers.last().map(|l| l.id), Some(b), "both moved above the third Twin");
         assert_eq!(m.active().unwrap().doc.layers.iter().rev().nth(2).map(|l| l.id), Some(target));
+        // An ⌥-drag copy of the selected layer beside itself replays by name too.
+        let mut c = Session::new();
+        c.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let src = photocraft_doc::LayerId(c.execute("layer.new.layer", json!({"name": "Solo"})).unwrap()["layer"].as_u64().unwrap());
+        c.execute("actions.record", json!({"name": "Copy"})).unwrap();
+        c.execute("layer.moveTo", json!({"layer": src.0, "target": src.0, "position": "above", "copy": true})).unwrap();
+        c.execute("actions.stop", json!({})).unwrap();
+        assert_eq!(c.actions.list[0].steps[0].1, json!({"target": "Solo", "position": "above", "copy": true}));
+        let saved = serde_json::to_string(&c.actions.list).unwrap();
+        let mut replay = Session::new();
+        replay.actions.list = serde_json::from_str(&saved).unwrap();
+        replay.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        replay.execute("layer.new.layer", json!({"name": "Solo"})).unwrap();
+        let before = replay.active().unwrap().doc.layers.len();
+        let result = replay.execute("actions.play", json!({"action": 0})).unwrap();
+        assert!(result.get("failed").is_none(), "{result}");
+        assert_eq!(replay.active().unwrap().doc.layers.len(), before + 1, "one copy");
         // A drag of several layers keeps its ids (not covered by name).
         s.execute("actions.record", json!({"name": "Several"})).unwrap();
         s.execute("layer.moveTo", json!({"layers": [ids[2].0, ids[3].0], "target": ids[1].0, "position": "above"})).unwrap();
