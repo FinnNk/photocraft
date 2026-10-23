@@ -30,6 +30,12 @@ impl Fault {
         matches!(self, Fault::Lost(_))
     }
 
+    /// An out-of-memory error on a device that still works: freeing memory and trying again can
+    /// succeed, unlike after a loss or a validation error (#6564).
+    pub fn is_out_of_memory(&self) -> bool {
+        matches!(self, Fault::Error(s) if s.to_ascii_lowercase().contains("out of memory"))
+    }
+
     /// The driver's or wgpu's message.
     pub fn detail(&self) -> &str {
         match self {
@@ -229,5 +235,8 @@ mod tests {
         assert_eq!(Fault::Error("x".into()).to_string(), "GPU error: x");
         assert_eq!(first_line("\n  Buffer 'pc' is invalid\nmore"), "Buffer 'pc' is invalid");
         assert_eq!(first_line(&"a".repeat(300)).chars().count(), 201);
+        assert!(Fault::Error("Out of Memory".into()).is_out_of_memory());
+        assert!(!Fault::Error("Validation Error".into()).is_out_of_memory());
+        assert!(!Fault::Lost("out of memory".into()).is_out_of_memory());
     }
 }
