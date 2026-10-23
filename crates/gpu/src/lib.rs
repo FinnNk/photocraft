@@ -621,6 +621,14 @@ fn field_reaches(progs: &[fx::MapProgram]) -> HashMap<FieldKind, i32> {
     want
 }
 
+/// How deeply `layers` nest groups, counted up to one past [`photocraft_doc::MAX_GROUP_DEPTH`].
+fn group_depth(layers: &[photocraft_doc::Layer], depth: usize) -> usize {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        return depth;
+    }
+    layers.iter().filter_map(|l| l.children()).map(|c| group_depth(c, depth + 1)).max().unwrap_or(depth)
+}
+
 /// One fingerprint per root layer of `doc` for the layer operators on it or inside it (0: none),
 /// for the stack-prefix cache (`Prefix::prepare`).
 fn operator_fingerprints(doc: &Document, ops: &[LayerOperator]) -> Vec<u64> {
@@ -835,6 +843,8 @@ impl Compositor {
         self.fx.clear();
         self.temps.clear();
         self.op_scratch = None;
+        self.op_made.clear();
+        self.op_pins.clear();
         self.prefix.clear();
     }
 
@@ -1028,6 +1038,9 @@ impl Compositor {
     pub fn forget_doc(&mut self, doc: DocId) {
         self.operators.remove(&doc);
         self.residents.retain(|_, r| r.doc != doc);
+        let residents = &self.residents;
+        self.op_made.retain(|k, _| residents.contains_key(k));
+        self.op_pins.retain(|k, _| residents.contains_key(k));
         self.fx.retain(|_, e| e.doc != doc);
         self.patterns.retain(|_, p| p.doc != doc);
         self.prefix.forget(doc);
@@ -1256,6 +1269,11 @@ impl Compositor {
         }
         // Operators run on the page texels (RGB); the CPU filters CMYK, Lab and the other modes'
         // own channels.
+        // Operator lookups walk groups to a bounded depth: deeper documents (past the model's own
+        // limit) can't have one missed.
+        if !ops.is_empty() && group_depth(&doc.layers, 0) > photocraft_doc::MAX_GROUP_DEPTH {
+            return Err(Unsupported("layer operators in a document nested too deeply".into()));
+        }
         if !ops.is_empty() && !matches!(doc.mode, photocraft_color::ColorMode::Rgb | photocraft_color::ColorMode::Grayscale) {
             return Err(Unsupported("layer operators need an RGB or Grayscale document (previewed on the CPU)".into()));
         }
@@ -1905,7 +1923,8 @@ impl Compositor {
         let tiles: Vec<(TileCoord, Arc<Tile>)> = read.tiles().filter_map(|c| surface.tile(c).map(|t| (c, t.clone()))).collect();
         let source_print = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            std::hash::Hash::hash(&(window, blur.extent), &mut h);
+            // The depth picks the source texels' format (RGBA8 or floats).
+            std::hash::Hash::hash(&(window, blur.extent, blur.depth as u8), &mut h);
             for (c, t) in &tiles {
                 std::hash::Hash::hash(&(c.tx, c.ty, Arc::as_ptr(t) as usize), &mut h);
             }
