@@ -56,7 +56,7 @@ use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
 
 pub use health::{DeviceHealth, Fault};
-pub use operator::{GaussianBlur, LayerOperator, OperatorInput, OperatorProgram, SeparableBlur};
+pub use operator::{GaussianBlur, LayerOperator, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
 
@@ -644,7 +644,7 @@ fn operator_fingerprints(doc: &Document, ops: &[LayerOperator]) -> Vec<u64> {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             let mut any = false;
             for o in ops.iter().filter(|o| holds(root, o.layer, 0)) {
-                std::hash::Hash::hash(&(o.layer.0, o.program.key()), &mut h);
+                std::hash::Hash::hash(&(o.layer.0, o.target, o.program.key()), &mut h);
                 any = true;
             }
             if any { std::hash::Hasher::finish(&h) | 1 } else { 0 }
@@ -1277,6 +1277,14 @@ impl Compositor {
         if !ops.is_empty() && !matches!(doc.mode, photocraft_color::ColorMode::Rgb | photocraft_color::ColorMode::Grayscale) {
             return Err(Unsupported("layer operators need an RGB or Grayscale document (previewed on the CPU)".into()));
         }
+        // A mask operator replaces the layer's own pixel mask, bound where the plan samples it: an
+        // enabled mask that isn't combined with vector masks first.
+        for o in ops.iter().filter(|o| o.target == OperatorTarget::Mask) {
+            let layer = doc.layer(o.layer).ok_or_else(|| Unsupported("a mask operator on a missing layer".into()))?;
+            if !layer.mask.as_ref().is_some_and(|m| m.enabled) || photocraft_compose::masks::combined_mask(layer, doc.bounds()).is_some() {
+                return Err(Unsupported("a mask operator on a disabled or vector-combined mask (previewed on the CPU)".into()));
+            }
+        }
         let plan = plan::plan_with(doc, ops.iter().map(|o| o.layer).collect())?;
         self.frame_ops = ops.clone();
         self.check_fx(doc, &plan)?;
@@ -1555,15 +1563,14 @@ impl Compositor {
         let grid = tile_grid(canvas);
         let area = |s: &Surface| s.tile_bounds().intersect(&grid);
         // An operator's output covers the layer's tiles and whatever it changes beyond them.
-        let tex_area = |t: &plan::TexUse<'_>| match ops.iter().find(|o| o.layer == t.layer && t.role == Role::Content) {
-            Some(o) => tile_grid(t.surface.get().tile_bounds().union(&o.program.changed_area())).intersect(&grid),
-            None => area(t.surface.get()),
+        let op_on = |layer: LayerId, target: OperatorTarget| ops.iter().find(|o| o.layer == layer && o.target == target);
+        let grown = |s: &Surface, o: Option<&LayerOperator>| match o {
+            Some(o) => tile_grid(s.tile_bounds().union(&o.program.changed_area())).intersect(&grid),
+            None => area(s),
         };
-        let areas = plan
-            .passes
-            .iter()
-            .map(|p| (p.tex.as_ref().map_or(Rect::EMPTY, tex_area), p.mask.as_ref().map_or(Rect::EMPTY, |m| area(m.surface.get()))))
-            .collect();
+        let tex_area = |t: &plan::TexUse<'_>| grown(t.surface.get(), op_on(t.layer, OperatorTarget::Content).filter(|_| t.role == Role::Content));
+        let mask_area = |m: &plan::MaskUse<'_>| grown(m.surface.get(), op_on(m.layer, OperatorTarget::Mask));
+        let areas = plan.passes.iter().map(|p| (p.tex.as_ref().map_or(Rect::EMPTY, tex_area), p.mask.as_ref().map_or(Rect::EMPTY, mask_area))).collect();
         let luts = plan.passes.iter().map(|p| p.lut.as_ref().map(|rows| lut_texture(device, queue, rows))).collect();
         let patterns = plan.passes.iter().map(|p| p.pattern.map(|pat| self.pattern_view(device, queue, pat))).collect();
         FrameRes { areas, luts, patterns }
@@ -1597,7 +1604,8 @@ impl Compositor {
                 continue;
             }
             let (ta, ma) = fr.areas.get(i).copied().unwrap_or((Rect::EMPTY, Rect::EMPTY));
-            let op = p.tex.as_ref().filter(|t| t.role == Role::Content).and_then(|t| ops.iter().find(|o| o.layer == t.layer));
+            let op =
+                p.tex.as_ref().filter(|t| t.role == Role::Content).and_then(|t| ops.iter().find(|o| o.layer == t.layer && o.target == OperatorTarget::Content));
             let tex = p
                 .tex
                 .as_ref()
@@ -1612,7 +1620,10 @@ impl Compositor {
             let mask = p
                 .mask
                 .as_ref()
-                .and_then(|m| self.sync(device, queue, encoder, doc, (m.layer, Role::Mask, cell), m.surface.get(), ma.intersect(&cr), stats))
+                .and_then(|m| match ops.iter().find(|o| o.layer == m.layer && o.target == OperatorTarget::Mask) {
+                    Some(o) => self.sync_operator(device, queue, encoder, doc, o, m.surface.get(), cell, ma.intersect(&cr), stats),
+                    None => self.sync(device, queue, encoder, doc, (m.layer, Role::Mask, cell), m.surface.get(), ma.intersect(&cr), stats),
+                })
                 .map(|(k, r)| {
                     keys.push(k);
                     (keys.len() - 1, r)

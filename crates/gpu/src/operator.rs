@@ -100,10 +100,23 @@ pub trait OperatorProgram: Send + Sync + std::fmt::Debug {
     fn program(&self) -> Program<'_>;
 }
 
+/// What of its layer an operator's output replaces.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum OperatorTarget {
+    /// The layer's pixels.
+    #[default]
+    Content,
+    /// The layer's pixel mask (a filter run with the mask targeted). The program reads the mask
+    /// as grey and the compositor samples the output's first channel in place of the mask; a
+    /// layer whose mask is combined with vector masks is refused.
+    Mask,
+}
+
 /// An operator on one layer of a document.
 #[derive(Clone, Debug)]
 pub struct LayerOperator {
     pub layer: LayerId,
+    pub target: OperatorTarget,
     pub program: Arc<dyn OperatorProgram>,
 }
 

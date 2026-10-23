@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use photocraft_doc::{DocId, Document, LayerContent, LayerId};
 use photocraft_geom::Rect;
-use photocraft_gpu::{GaussianBlur, LayerOperator, SeparableBlur};
+use photocraft_gpu::{GaussianBlur, LayerOperator, OperatorTarget, SeparableBlur};
 use serde_json::Value;
 
 use crate::PhotocraftApp;
@@ -57,6 +57,18 @@ pub struct FilterGpuPreview {
     window: std::cell::Cell<Option<Rect>>,
     /// Zoomed out: the reduced proxy the preview runs on instead.
     proxy: Option<FilterProxy>,
+    /// The Navigator's picture of the preview ([`navigator_doc`]).
+    nav: Option<NavigatorProxy>,
+}
+
+/// The Navigator's picture while the filter previews on the GPU: the CPU preview's own filter
+/// run on a proxy of the Navigator's size (its operator lives on the main canvas, whose texture
+/// is only drawn where the view is).
+struct NavigatorProxy {
+    k: u32,
+    base: Arc<Document>,
+    /// The settings hash shown and the filtered proxy.
+    shown: Option<(u64, Arc<Document>)>,
 }
 
 /// A zoomed-out session's proxy of the document: reduced by `k`, with its own ids.
@@ -96,20 +108,29 @@ pub fn ineligible(app: &PhotocraftApp, idx: usize, params: &Value) -> Option<&'s
     if st.channel_view.target != photocraft_engine::channel_cmds::ChannelTarget::Composite || doc.quick_mask.is_some() {
         return Some("filtering a channel");
     }
-    if !app.with_mask_target(COMMAND, Value::Null).is_null() {
-        return Some("filtering a layer mask");
-    }
     let Some(target) = st.active_layer else { return Some("no active layer") };
     let Some(layer) = doc.layer(target) else { return Some("no active layer") };
-    if !matches!(layer.content, LayerContent::Raster(_)) {
-        return Some("not a pixel layer");
+    if targets(app) == OperatorTarget::Mask {
+        // The operator replaces the pixel mask the compositor samples: an enabled one, not
+        // combined with vector masks first, and not shown on its own (the ⌥-click view).
+        if st.channel_view.layer_mask.is_some() {
+            return Some("the layer mask is viewed on its own");
+        }
+        if !layer.mask.as_ref().is_some_and(|m| m.enabled) || photocraft_compose::masks::combined_mask(layer, doc.bounds()).is_some() {
+            return Some("the layer mask is disabled, feathered or combined with a vector mask");
+        }
+    } else {
+        if !matches!(layer.content, LayerContent::Raster(_)) {
+            return Some("not a pixel layer");
+        }
+        // The engine filters a targeted mask whatever the layer's locks.
+        let locks = doc.effective_locks(target);
+        if locks.pixels || locks.all {
+            return Some("the layer is locked");
+        }
     }
     if photocraft_compose::effects::has_effects(layer) || under_effects(&doc.layers, target, 0) {
         return Some("the layer or a group around it has effects");
-    }
-    let locks = doc.effective_locks(target);
-    if locks.pixels || locks.all {
-        return Some("the layer is locked");
     }
     // Zoomed out the preview runs on a reduced proxy (a later phase); at 100 % every pixel.
     if crate::canvas::filter_preview_factor(app, doc, COMMAND, params) > 1 && !photocraft_compose::proxy::proxy_faithful(doc) {
@@ -122,6 +143,12 @@ pub fn ineligible(app: &PhotocraftApp, idx: usize, params: &Value) -> Option<&'s
         return Some("the GPU compositor can't draw it");
     }
     None
+}
+
+/// What the filter edits: the active layer's mask when the Layers panel (or an adjustment layer)
+/// targets it, as `PhotocraftApp::with_mask_target` routes the command; else its pixels.
+fn targets(app: &PhotocraftApp) -> OperatorTarget {
+    if app.with_mask_target(COMMAND, Value::Null).is_null() { OperatorTarget::Content } else { OperatorTarget::Mask }
 }
 
 /// Whether `target` sits inside a group with layer effects (bounded depth).
@@ -151,14 +178,27 @@ fn gpu_view(app: &PhotocraftApp, idx: usize) -> bool {
 /// dialog is open, so they are measured once rather than on every slider step.
 #[derive(Clone, Copy, Debug)]
 struct Measured {
+    /// What the filter edits (the layer's pixels or its mask).
+    on: OperatorTarget,
+    /// The filter's content bounds: the layer's pixels, or for a mask the canvas and the mask's
+    /// pixels (`photocraft_engine::filters::run_filter`).
     content: Rect,
     selection: Option<Rect>,
+    /// The depth the result rounds to: the document's, or the mask's own.
+    depth: photocraft_color::SampleType,
 }
 
 impl Measured {
-    fn of(doc: &Document, target: LayerId) -> Option<Self> {
-        let content = doc.layer(target)?.surface()?.content_bounds();
-        Some(Measured { content, selection: doc.selection.as_ref().map(photocraft_raster::Surface::content_bounds) })
+    fn of(doc: &Document, target: LayerId, on: OperatorTarget) -> Option<Self> {
+        let layer = doc.layer(target)?;
+        let (content, depth) = match on {
+            OperatorTarget::Content => (layer.surface()?.content_bounds(), doc.depth),
+            OperatorTarget::Mask => {
+                let m = &layer.mask.as_ref()?.surface;
+                (doc.bounds().union(&m.content_bounds()), m.format().sample)
+            }
+        };
+        Some(Measured { on, content, selection: doc.selection.as_ref().map(photocraft_raster::Surface::content_bounds), depth })
     }
 }
 
@@ -173,7 +213,7 @@ fn blur_for(
     measured: Measured,
 ) -> Option<(GaussianBlur, Rect)> {
     let fp = photocraft_engine::filters::params_for(COMMAND, params)?;
-    let Measured { content, selection: sel_bounds } = measured;
+    let Measured { on, content, selection: sel_bounds, depth } = measured;
     let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
     let area = photocraft_algo::output_area(&fp, content, bounds, sel_bounds);
     let extent = photocraft_algo::separable::edge_extent(doc.bounds(), content);
@@ -181,8 +221,9 @@ fn blur_for(
         photocraft_algo::separable::Separable::Kernel(k) => SeparableBlur::Kernel(k),
         photocraft_algo::separable::Separable::Boxes(b) => SeparableBlur::Boxes(b),
     };
-    let keep_alpha = doc.effective_locks(target).transparency;
-    let op = GaussianBlur::new(blur, extent, area, selection, keep_alpha, doc.depth)?;
+    // Lock Transparency keeps a layer's alpha; a mask has none.
+    let keep_alpha = on == OperatorTarget::Content && doc.effective_locks(target).transparency;
+    let op = GaussianBlur::new(blur, extent, area, selection, keep_alpha, depth)?;
     Some((op, area.intersect(&doc.bounds())))
 }
 
@@ -229,7 +270,8 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         return None;
     };
     let target = app.session.documents().get(idx)?.active_layer?;
-    let session = hash(&[&doc_id.0.to_le_bytes(), &revision.to_le_bytes(), &target.0.to_le_bytes(), &dialog_id.to_le_bytes()]);
+    let on = [u8::from(targets(app) == OperatorTarget::Mask)];
+    let session = hash(&[&doc_id.0.to_le_bytes(), &revision.to_le_bytes(), &target.0.to_le_bytes(), &dialog_id.to_le_bytes(), &on]);
     if app.filter_gpu_preview.as_ref().is_none_or(|p| p.s.session != session || p.s.doc != doc_id) {
         if let Some(reason) = ineligible(app, idx, &params) {
             log::debug!("filter preview on the CPU: {reason}");
@@ -241,7 +283,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         hide(app);
         let st = app.session.documents().get(idx)?;
         let selection = st.doc.selection.clone().map(Arc::new);
-        let measured = Measured::of(&st.doc, target)?;
+        let measured = Measured::of(&st.doc, target, targets(app))?;
         let (_, region) = blur_for(&st.doc, target, &params, selection.clone(), measured)?;
         app.filter_gpu_preview = Some(FilterGpuPreview {
             s: PreviewSession::new(TAG, SESSION_BITS, doc_id, revision, session, region),
@@ -255,6 +297,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             committing: false,
             window: std::cell::Cell::new(None),
             proxy: None,
+            nav: None,
         });
     }
     let p = app.filter_gpu_preview.as_ref()?;
@@ -291,7 +334,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             hide(app);
             return None;
         };
-        let op = LayerOperator { layer: p.target, program: Arc::new(blur) };
+        let op = LayerOperator { layer: p.target, target: p.measured.on, program: Arc::new(blur) };
         if let Some(gpu) = app.gpu.as_ref() {
             gpu.set_operators(doc_id, vec![op.clone()]);
         }
@@ -342,7 +385,8 @@ fn update_proxy<'a>(app: &'a mut PhotocraftApp, idx: usize, k: u32, params: &Val
         if !gpu.supports(&base) {
             return None;
         }
-        let measured = Measured::of(&base, target)?;
+        let on = app.filter_gpu_preview.as_ref()?.measured.on;
+        let measured = Measured::of(&base, target, on)?;
         let selection = base.selection.clone().map(Arc::new);
         let region = Rect::EMPTY;
         let g = FilterProxy { k, base: Arc::new(base), target, selection, measured, shown: None, drawn: None, region };
@@ -357,7 +401,7 @@ fn update_proxy<'a>(app: &'a mut PhotocraftApp, idx: usize, k: u32, params: &Val
             hide_proxy(app);
             return None;
         };
-        let op = LayerOperator { layer: g.target, program: Arc::new(blur) };
+        let op = LayerOperator { layer: g.target, target: g.measured.on, program: Arc::new(blur) };
         if let Some(gpu) = app.gpu.as_ref() {
             gpu.set_operators(g.base.id, vec![op.clone()]);
         }
@@ -405,6 +449,44 @@ pub fn gpu_keys(app: &PhotocraftApp) -> Option<u64> {
     let g = app.filter_gpu_preview.as_ref()?.proxy.as_ref()?;
     g.shown.as_ref().map(|_| g.base.id.0)
 }
+
+/// What the Navigator shows of document `idx` while the filter previews on the GPU, and its key:
+/// the filter run on a proxy of the Navigator's size, exactly as the CPU preview runs it on a
+/// zoomed-out proxy (made once per session). `None` when the GPU isn't previewing it.
+pub fn navigator_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
+    let st = app.session.documents().get(idx)?;
+    let p = app.filter_gpu_preview.as_ref()?;
+    let showing = p.shown.is_some() || p.proxy.as_ref().is_some_and(|g| g.shown.is_some());
+    if p.s.doc != st.doc.id || p.failed || !showing {
+        return None;
+    }
+    let (_, params, _) = dialog(app)?;
+    let params = app.with_mask_target(COMMAND, params);
+    let h = hash(&[params.to_string().as_bytes()]);
+    let longest = st.doc.size.width.max(st.doc.size.height);
+    // The largest factor that keeps the proxy at least the Navigator's size.
+    let k = (longest / crate::canvas::NAVIGATOR_SIDE).max(1);
+    let target = p.target;
+    if p.nav.as_ref().is_none_or(|n| n.k != k) {
+        let base = Arc::new(crate::adjust_preview::proxy_base(&st.doc, k));
+        app.filter_gpu_preview.as_mut()?.nav = Some(NavigatorProxy { k, base, shown: None });
+    }
+    let n = app.filter_gpu_preview.as_ref()?.nav.as_ref()?;
+    if let Some((sh, doc)) = &n.shown
+        && *sh == h
+    {
+        return Some((doc.clone(), h ^ NAVIGATOR_KEY));
+    }
+    let mut scaled = params;
+    crate::filter_dialog::scale_preview_params(COMMAND, &mut scaled, k);
+    let doc = crate::filter_dialog::preview_document(&n.base, Some(crate::adjust_preview::proxy_layer(target)), COMMAND, &scaled, 1)?;
+    let doc = Arc::new(doc);
+    app.filter_gpu_preview.as_mut()?.nav.as_mut()?.shown = Some((h, doc.clone()));
+    Some((doc, h ^ NAVIGATOR_KEY))
+}
+
+/// Marks the Navigator's keys apart from the canvas's preview keys.
+const NAVIGATOR_KEY: u64 = 0x6e61_7669_6761_746f;
 
 fn clear_operators(app: &PhotocraftApp, doc: DocId) {
     if let Some(gpu) = app.gpu.as_ref() {
