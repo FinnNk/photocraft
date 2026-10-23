@@ -22,9 +22,13 @@ fn render_state() -> Option<eframe::egui_wgpu::RenderState> {
 /// Whether this adapter runs the GPU path (software adapters on CI may lack operators); a test
 /// skips when it doesn't, unless `PHOTOCRAFT_REQUIRE_GPU_TESTS` asks for it.
 fn gpu_path(h: &Harness<'static, PhotocraftApp>) -> bool {
-    let Some(why) = ineligible(h.state(), 0, &json!({"radius": 4.0})) else { return true };
+    // A CPU-emulated adapter (WARP, llvmpipe on CI) runs the path but times out drawing frame
+    // after frame: these are GPU tests.
+    let software = h.state().perf.gpu_info.device_type == "cpu";
+    let why = if software { Some("a software (CPU) adapter") } else { ineligible(h.state(), 0, &json!({"radius": 4.0})) };
+    let Some(why) = why else { return true };
     // Only what the adapter can't do skips; anything else is a broken fixture.
-    let capability = matches!(why, "no GPU canvas" | "the GPU compositor can't draw it");
+    let capability = matches!(why, "no GPU canvas" | "the GPU compositor can't draw it" | "a software (CPU) adapter");
     assert!(capability && std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_none(), "the GPU path is unavailable here: {why}");
     eprintln!("skipping filter GPU preview test: {why}");
     false
