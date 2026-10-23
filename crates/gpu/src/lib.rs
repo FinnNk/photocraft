@@ -1860,7 +1860,7 @@ impl Compositor {
             return None;
         }
         let operator::Program::Separable(blur) = op.program.program();
-        let window = region.inflate(blur.reach());
+        let window = region.inflate(operator::apron(blur.reach()));
         let (wk, ok, mk) = ((op.layer, Role::OperatorSource, cell), (op.layer, Role::Operator, cell), (op.layer, Role::OperatorMask, cell));
         let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST;
         let desc = |label, r: Rect| wgpu::TextureDescriptor {
@@ -1901,12 +1901,18 @@ impl Compositor {
         if fresh(self, &wk, window, source_print) {
             touch(self, &wk);
         } else {
-            let texture = self.create_layer_texture(device, &desc("pc_operator_source", window), wk, bytes(window), stats)?;
+            // 8-bit sources as 8-bit texels: exact, and a quarter of the upload.
+            let eight = operator::source_is_8bit(blur.depth);
+            let (format, kind, bpp) = if eight { (wgpu::TextureFormat::Rgba8Unorm, TexKind::Rgba8, 4) } else { (wgpu::TextureFormat::Rgba32Float, TexKind::Rgba32F, 16) };
+            let source_desc = wgpu::TextureDescriptor { format, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, ..desc("pc_operator_source", window) };
+            let size = u64::from(window.width()) * u64::from(window.height()) * bpp;
+            let texture = self.create_layer_texture(device, &source_desc, wk, size, stats)?;
             let texels = operator::read_window(surface, window, blur.extent);
-            operator::write_texels(queue, &texture, window.width(), window.height(), &texels);
-            self.staged += bytes(window);
-            stats.bytes_uploaded += bytes(window) as usize;
+            operator::write_bytes(queue, &texture, window.width(), window.height(), bpp as u32, &operator::source_bytes(blur.depth, &texels));
+            self.staged += size;
+            stats.bytes_uploaded += size as usize;
             let mut resident = self.operator_resident(texture, window, surface, doc);
+            resident.kind = kind;
             // The fingerprint hashes the tiles' addresses: holding them keeps another tile from
             // taking one of those addresses while the page is kept.
             resident.tiles = tiles.iter().cloned().collect();

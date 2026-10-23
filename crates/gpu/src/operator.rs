@@ -219,6 +219,29 @@ pub(crate) fn read_selection(selection: &Surface, rect: Rect) -> Vec<f32> {
     selection.read_region(rect).chunks_exact(ch).map(|s| s.first().copied().unwrap_or(0.0)).collect()
 }
 
+/// The margin a blur's window keeps around its output: the reach rounded up to 128 pixels, so the
+/// small reach changes of a slider drag keep the window (and its upload). A wider window gives
+/// the same results: outputs never read within the reach of its edge, and beyond the extent it
+/// repeats the edge anyway.
+pub(crate) fn apron(reach: i32) -> i32 {
+    reach.clamp(0, MAX_REACH).saturating_add(127) / 128 * 128
+}
+
+/// Whether a source window of a `depth` document is stored as 8-bit texels: exactly the values
+/// the CPU reads (`u8 / 255`), a quarter of the floats' bytes.
+pub(crate) fn source_is_8bit(depth: SampleType) -> bool {
+    depth == SampleType::U8
+}
+
+/// A source window's texels as `source_is_8bit` stores them (RGBA8, or RGBA32F).
+pub(crate) fn source_bytes(depth: SampleType, texels: &[[f32; 4]]) -> Vec<u8> {
+    if source_is_8bit(depth) {
+        texels.iter().flat_map(|t| t.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)).collect()
+    } else {
+        texels.iter().flat_map(|t| t.iter().flat_map(|v| v.to_le_bytes())).collect()
+    }
+}
+
 /// Steps per unit a result is rounded to at `depth` (0: floats).
 pub(crate) fn levels(depth: SampleType) -> f32 {
     match depth {
@@ -341,10 +364,15 @@ pub(crate) fn float_texture(device: &wgpu::Device, label: &str, w: u32, h: u32) 
 /// Upload straight RGBA `texels` (`w` wide) to `texture` at (0, 0).
 pub(crate) fn write_texels(queue: &wgpu::Queue, texture: &wgpu::Texture, w: u32, h: u32, texels: &[[f32; 4]]) {
     let bytes: Vec<u8> = texels.iter().flat_map(|t| t.iter().flat_map(|v| v.to_le_bytes())).collect();
+    write_bytes(queue, texture, w, h, 16, &bytes);
+}
+
+/// Upload rows of `bpp`-byte texels (`w` wide) to `texture` at (0, 0).
+pub(crate) fn write_bytes(queue: &wgpu::Queue, texture: &wgpu::Texture, w: u32, h: u32, bpp: u32, bytes: &[u8]) {
     queue.write_texture(
         texture.as_image_copy(),
-        &bytes,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 16), rows_per_image: Some(h) },
+        bytes,
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * bpp), rows_per_image: Some(h) },
         wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
     );
 }
