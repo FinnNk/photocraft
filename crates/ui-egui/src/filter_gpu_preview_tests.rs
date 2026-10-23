@@ -376,4 +376,12 @@ fn another_active_document_leaves_the_committing_session() {
     assert!(display_doc(h.state_mut(), other).is_none());
     assert!(h.state().filter_gpu_preview.as_ref().is_some_and(|p| p.committing && p.s.doc == doc), "the committing session is kept");
     assert!(h.state().gpu.as_ref().unwrap().has_operators(doc));
+    // The job lands while the other document stays active: the session retires there, and the
+    // other document's dialog previews on the GPU.
+    let job = h.state().session.job_on(doc).map(|j| j.id);
+    if let Some(job) = job {
+        h.state_mut().session.wait_job(job).unwrap();
+    }
+    settle(&mut h, |app| on_gpu(app, other));
+    assert!(!h.state().gpu.as_ref().unwrap().has_operators(doc), "the applied document's operator is gone");
 }

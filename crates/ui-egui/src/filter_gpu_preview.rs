@@ -161,10 +161,19 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         clear_operators(app, doc_id);
         return None;
     }
-    // Another document's OK is still applying: its session stays as it is until the job lands
-    // (this document previews on the CPU meanwhile).
-    if app.filter_gpu_preview.as_ref().is_some_and(|p| p.committing) {
-        return None;
+    // Another document's OK: its session stays as it is while the job applies (this document
+    // previews on the CPU meanwhile), and is retired here once it has landed.
+    if let Some(p) = app.filter_gpu_preview.as_ref().filter(|p| p.committing) {
+        let (doc, revision) = (p.s.doc, p.s.revision);
+        let applying = app.session.documents().iter().any(|st| st.doc.id == doc && st.revision == revision) && app.session.job_on(doc).is_some();
+        if applying {
+            return None;
+        }
+        if let Some(p) = app.filter_gpu_preview.as_mut() {
+            p.committing = false;
+            p.shown = None;
+        }
+        clear_operators(app, doc);
     }
     if app.session.active_index() != Some(idx) {
         return None;
