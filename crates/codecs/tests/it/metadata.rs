@@ -42,6 +42,8 @@ fn check_format(format: Format) {
         // WebP's resolution lives in EXIF, so the block comes back with resolution tags added.
         let back_exif = back.meta.exif.as_deref().unwrap_or_else(|| panic!("{format:?} lost exif"));
         assert_eq!(photocraft_codecs::resolution::exif_resolution(back_exif).map(|(x, y)| (x.round(), y.round())), Some((300.0, 150.0)));
+        // The rest of the block survives too: the Orientation tag (0x0112, little-endian).
+        assert!(back_exif.windows(2).any(|w| w == b""), "{format:?} lost Orientation");
     } else if c.exif {
         assert_eq!(back.meta.exif, img.meta.exif, "{format:?} exif");
     } else {
@@ -314,6 +316,11 @@ fn webp_keeps_dpi_without_source_exif() {
         let (x, y) = back.meta.dpi.unwrap_or_else(|| panic!("lossless {lossless}: dpi lost"));
         assert!((x - 300.0).abs() < 0.05 && (y - 150.0).abs() < 0.05, "lossless {lossless}: {x},{y}");
     }
+    // EXIF that can't be parsed is written as it is, so the resolution is reported as dropped.
+    img.meta = Metadata { exif: Some(b"Exif  garbage".to_vec()), dpi: Some((300.0, 150.0)), ..Default::default() };
+    assert!(fidelity_warnings(&img, Format::WebP).contains(&FidelityWarning::DpiDropped));
+    let back = decode(&encode(&img, Format::WebP, &EncodeOptions::default()).unwrap()).unwrap();
+    assert!(back.meta.exif.is_some());
     // Without a resolution or EXIF there is still no EXIF chunk.
     img.meta = Metadata::default();
     let back = decode(&encode(&img, Format::WebP, &EncodeOptions::default()).unwrap()).unwrap();

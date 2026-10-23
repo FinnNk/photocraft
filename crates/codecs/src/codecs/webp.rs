@@ -167,13 +167,20 @@ fn encode_lossy(img: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError
 /// The EXIF to write: the image's, upright (the pixels are written as they are shown, so a viewer
 /// must never rotate them again), carrying the resolution. WebP has no resolution field of its own,
 /// so the resolution goes into EXIF, added when the image has none (#2399).
-fn export_exif(img: &Image) -> Option<Vec<u8>> {
+pub(crate) fn export_exif(img: &Image) -> Option<Vec<u8>> {
     let exif = img.meta.exif.as_deref().unwrap_or_default();
     if exif.is_empty() && img.meta.dpi.is_none() {
         return None;
     }
     let out = crate::resolution::export_exif_adding_missing_resolution(exif, img.meta.dpi).into_owned();
     (!out.is_empty()).then_some(out)
+}
+
+/// Whether a WebP of `img` keeps its resolution: the EXIF written carries it. Not when the image's
+/// own EXIF can't be parsed: that block is written as it is rather than replaced, so the
+/// resolution is dropped (and reported) instead of the metadata.
+pub(crate) fn keeps_dpi(img: &Image) -> bool {
+    img.meta.dpi.is_none() || export_exif(img).is_some_and(|e| crate::resolution::exif_resolution(&e).is_some())
 }
 
 /// A RIFF chunk: FourCC, little-endian size, payload, padded to an even length.
