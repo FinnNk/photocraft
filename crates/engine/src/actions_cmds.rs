@@ -1263,6 +1263,15 @@ mod tests {
         assert!(result.get("failed").is_none(), "{recorded}: {result}");
         let top_layer = |s: &Session| s.active().unwrap().doc.layers.last().map(|l| l.id);
         assert_eq!(top_layer(&replay), Some(group2), "{recorded}: the group went to the top");
+        // Several moved layers named like the target are left out too, so the name is unambiguous.
+        let mut m = Session::new();
+        m.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let a = photocraft_doc::LayerId(m.execute("layer.new.layer", json!({"name": "Twin"})).unwrap()["layer"].as_u64().unwrap());
+        let b = photocraft_doc::LayerId(m.execute("layer.new.layer", json!({"name": "Twin"})).unwrap()["layer"].as_u64().unwrap());
+        let target = photocraft_doc::LayerId(m.execute("layer.new.layer", json!({"name": "Twin"})).unwrap()["layer"].as_u64().unwrap());
+        m.execute("layer.moveTo", json!({"layers": [a.0, b.0], "target": "Twin", "position": "above"})).unwrap();
+        assert_eq!(m.active().unwrap().doc.layers.last().map(|l| l.id), Some(b), "both moved above the third Twin");
+        assert_eq!(m.active().unwrap().doc.layers.iter().rev().nth(2).map(|l| l.id), Some(target));
         // A drag of several layers keeps its ids (not covered by name).
         s.execute("actions.record", json!({"name": "Several"})).unwrap();
         s.execute("layer.moveTo", json!({"layers": [ids[2].0, ids[3].0], "target": ids[1].0, "position": "above"})).unwrap();

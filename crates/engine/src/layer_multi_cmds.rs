@@ -118,11 +118,11 @@ pub(crate) fn recorded_selection(s: &Session, mut p: Value) -> Value {
     p
 }
 
-/// The layers named `name`, in document order, other than the one being moved and (a group) its
-/// contents. Moving one layer never changes the others' order, so an occurrence counted among
-/// these means the same layer before the move (when an action replays it) and after it (when the
-/// step is recorded).
-fn same_named_targets(doc: &photocraft_doc::Document, name: &str, moved: Option<LayerId>) -> Vec<LayerId> {
+/// The layers named `name`, in document order, other than the ones being moved and (groups) their
+/// contents. Moving layers never changes the others' order, so an occurrence counted among these
+/// means the same layer before the move (when an action replays it) and after it (when the step
+/// is recorded).
+fn same_named_targets(doc: &photocraft_doc::Document, name: &str, moved: &[LayerId]) -> Vec<LayerId> {
     fn subtree(l: &Layer, out: &mut Vec<LayerId>, depth: usize) {
         out.push(l.id);
         if depth < 256
@@ -132,7 +132,7 @@ fn same_named_targets(doc: &photocraft_doc::Document, name: &str, moved: Option<
         }
     }
     let mut skip = Vec::new();
-    if let Some(l) = moved.and_then(|id| doc.layer(id)) {
+    for l in moved.iter().filter_map(|id| doc.layer(*id)) {
         subtree(l, &mut skip, 0);
     }
     doc.walk().into_iter().filter(|(_, _, l)| l.name == name && !skip.contains(&l.id)).map(|(_, _, l)| l.id).collect()
@@ -159,7 +159,7 @@ fn recorded_move(s: &Session, mut p: Value, pre_selected: Option<&[LayerId]>) ->
     }
     let Some(id) = p.get("target").and_then(Value::as_u64).map(LayerId) else { return p };
     let Some(layer) = st.doc.layer(id) else { return p };
-    let matches = same_named_targets(&st.doc, &layer.name, moved);
+    let matches = same_named_targets(&st.doc, &layer.name, moved.as_slice());
     let Some(occurrence) = matches.iter().position(|candidate| *candidate == id) else { return p };
     if let Some(fields) = p.as_object_mut() {
         fields.insert("target".into(), json!(layer.name));
@@ -171,8 +171,8 @@ fn recorded_move(s: &Session, mut p: Value, pre_selected: Option<&[LayerId]>) ->
 }
 
 /// `layer.moveTo`'s drop target: an id, or a name with `targetOccurrence` choosing among layers
-/// that share it (in document order, the moved layer `moved` aside; required when several do).
-fn move_target(s: &Session, p: &Value, moved: Option<LayerId>) -> Result<LayerId> {
+/// that share it (in document order, the `moved` layers aside; required when several do).
+fn move_target(s: &Session, p: &Value, moved: &[LayerId]) -> Result<LayerId> {
     const CMD: &str = "layer.moveTo";
     match p.get("target") {
         Some(Value::String(name)) => {
@@ -1370,7 +1370,7 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         vec![crate::commands::layer_param(s, p)?]
     };
-    let target = move_target(s, p, requested.first().copied().filter(|_| requested.len() == 1))?;
+    let target = move_target(s, p, &requested)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = &st.doc;
     let target_path = doc.path_of(target).ok_or(EngineError::NoLayer(target))?;
