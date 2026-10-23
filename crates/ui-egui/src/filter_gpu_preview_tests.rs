@@ -22,12 +22,12 @@ fn render_state() -> Option<eframe::egui_wgpu::RenderState> {
 /// Whether this adapter runs the GPU path (software adapters on CI may lack operators); a test
 /// skips when it doesn't, unless `PHOTOCRAFT_REQUIRE_GPU_TESTS` asks for it.
 fn gpu_path(h: &Harness<'static, PhotocraftApp>) -> bool {
-    let why = ineligible(h.state(), 0, &json!({"radius": 4.0}));
-    if let Some(why) = why {
-        assert!(std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_none(), "the GPU path is unavailable here: {why}");
-        eprintln!("skipping filter GPU preview test: {why}");
-    }
-    why.is_none()
+    let Some(why) = ineligible(h.state(), 0, &json!({"radius": 4.0})) else { return true };
+    // Only what the adapter can't do skips; anything else is a broken fixture.
+    let capability = matches!(why, "no GPU canvas" | "the GPU compositor can't draw it");
+    assert!(capability && std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_none(), "the GPU path is unavailable here: {why}");
+    eprintln!("skipping filter GPU preview test: {why}");
+    false
 }
 
 /// The app on a GPU canvas with a 2000×1500 document of hard-edged colour stripes (on a
@@ -121,13 +121,22 @@ fn probes_named(h: &mut Harness<'static, PhotocraftApp>, name: Option<&str>) -> 
 /// (the canvas samples between document pixels), and the least alpha (compared only where it's
 /// opaque: the checker shows through elsewhere).
 fn expected(app: &PhotocraftApp, radius: Option<f64>, p: (i32, i32)) -> ([(u8, u8); 3], f32) {
+    expected_in(app, &oracle(app, radius), p)
+}
+
+/// The CPU preview of `radius` (`None`: the document itself), the oracle [`expected`] reads.
+fn oracle(app: &PhotocraftApp, radius: Option<f64>) -> std::sync::Arc<Document> {
     let st = app.session.active().unwrap();
-    let doc = match radius {
+    match radius {
         Some(r) => std::sync::Arc::new(crate::filter_dialog::preview_document(&st.doc, st.active_layer, COMMAND, &json!({"radius": r}), 1).unwrap()),
         None => st.doc.clone(),
-    };
-    let buf = photocraft_compose::render(&doc, photocraft_geom::Rect::new(p.0 - 1, p.1 - 1, p.0 + 2, p.1 + 2));
-    let (display, _) = crate::canvas::canvas_display(app, &doc, None);
+    }
+}
+
+/// [`expected`] from an oracle document made once.
+fn expected_in(app: &PhotocraftApp, doc: &Document, p: (i32, i32)) -> ([(u8, u8); 3], f32) {
+    let buf = photocraft_compose::render(doc, photocraft_geom::Rect::new(p.0 - 1, p.1 - 1, p.0 + 2, p.1 + 2));
+    let (display, _) = crate::canvas::canvas_display(app, doc, None);
     let img = crate::canvas::display_image(display.as_deref(), &buf);
     let mut range = [(255u8, 0u8); 3];
     for c in &img.pixels {
@@ -201,6 +210,7 @@ fn a_failing_gpu_preview_falls_back_to_the_cpu_preview() {
         let st = h.state().session.active().unwrap();
         st.doc.clone()
     };
+    let (raw_doc, r4_doc, r12_doc) = (oracle(h.state(), None), oracle(h.state(), Some(4.0)), oracle(h.state(), Some(12.0)));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         h.step();
@@ -208,9 +218,9 @@ fn a_failing_gpu_preview_falls_back_to_the_cpu_preview() {
         let doc_now = h.state().session.active().unwrap().doc.clone();
         assert!(std::sync::Arc::ptr_eq(&doc_now, &unfiltered), "nothing applied yet");
         for (p, px) in probes(&mut h) {
-            let (raw, alpha) = expected(h.state(), None, p);
-            let (r4, _) = expected(h.state(), Some(4.0), p);
-            let (r12, _) = expected(h.state(), Some(12.0), p);
+            let (raw, alpha) = expected_in(h.state(), &raw_doc, p);
+            let (r4, _) = expected_in(h.state(), &r4_doc, p);
+            let (r12, _) = expected_in(h.state(), &r12_doc, p);
             // Where the unfiltered layer can't be mistaken for either blur, the frame shows a blur.
             let apart = |b: &[(u8, u8); 3]| (0..3).any(|c| b[c].0 > raw[c].1.saturating_add(12) || raw[c].0 > b[c].1.saturating_add(12));
             if alpha > 0.999 && apart(&r4) && apart(&r12) {
@@ -342,4 +352,28 @@ fn another_documents_view_keeps_the_committing_preview() {
         assert!(on_gpu(h.state_mut(), 0), "the committing preview stays");
         assert!(h.state().gpu.as_ref().unwrap().has_operators(doc));
     }
+}
+
+/// While one document's OK is applying, another document becoming active (and opening the same
+/// dialog) leaves the committing session alone.
+#[test]
+fn another_active_document_leaves_the_committing_session() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, id) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    settle(&mut h, |app| on_gpu(app, 0));
+    let doc = h.state().session.active().unwrap().doc.id;
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    if h.state().session.job_on(doc).is_none() {
+        return; // The job already landed: nothing to keep.
+    }
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let other = h.state().session.active_index().unwrap();
+    crate::filter_dialog::open(h.state_mut(), COMMAND).unwrap();
+    assert!(display_doc(h.state_mut(), other).is_none());
+    assert!(h.state().filter_gpu_preview.as_ref().is_some_and(|p| p.committing && p.s.doc == doc), "the committing session is kept");
+    assert!(h.state().gpu.as_ref().unwrap().has_operators(doc));
 }

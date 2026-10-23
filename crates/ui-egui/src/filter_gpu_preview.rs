@@ -161,6 +161,11 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         clear_operators(app, doc_id);
         return None;
     }
+    // Another document's OK is still applying: its session stays as it is until the job lands
+    // (this document previews on the CPU meanwhile).
+    if app.filter_gpu_preview.as_ref().is_some_and(|p| p.committing) {
+        return None;
+    }
     if app.session.active_index() != Some(idx) {
         return None;
     }
