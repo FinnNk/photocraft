@@ -19,6 +19,17 @@ fn render_state() -> Option<eframe::egui_wgpu::RenderState> {
     }
 }
 
+/// Whether this adapter runs the GPU path (software adapters on CI may lack operators); a test
+/// skips when it doesn't, unless `PHOTOCRAFT_REQUIRE_GPU_TESTS` asks for it.
+fn gpu_path(h: &Harness<'static, PhotocraftApp>) -> bool {
+    let why = ineligible(h.state(), 0, &json!({"radius": 4.0}));
+    if let Some(why) = why {
+        assert!(std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_none(), "the GPU path is unavailable here: {why}");
+        eprintln!("skipping filter GPU preview test: {why}");
+    }
+    why.is_none()
+}
+
 /// The app on a GPU canvas with a 2000×1500 document of hard-edged colour stripes (on a
 /// transparent margin) at 100 %, and Gaussian Blur's dialog open at `radius`.
 fn harness(rs: eframe::egui_wgpu::RenderState, radius: f64, background_jobs: bool) -> (Harness<'static, PhotocraftApp>, u64) {
@@ -153,6 +164,9 @@ fn the_gpu_preview_matches_the_cpu_preview_through_slider_changes_and_pans() {
     let _guard = photocraft_testkit::gpu_lock();
     let Some(rs) = render_state() else { return };
     let (mut h, _id) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
     settle(&mut h, |app| on_gpu(app, 0));
     assert!(h.state().filter_preview.as_ref().is_none_or(|p| p.result.is_none()), "the CPU preview stands aside");
     assert_shows(&mut h, Some(4.0), "radius 4");
@@ -177,6 +191,9 @@ fn a_failing_gpu_preview_falls_back_to_the_cpu_preview() {
     let _guard = photocraft_testkit::gpu_lock();
     let Some(rs) = render_state() else { return };
     let (mut h, id) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
     settle(&mut h, |app| on_gpu(app, 0));
     h.state().gpu.as_ref().unwrap().fail_operators(true);
     set_radius(&mut h, id, 12.0);
@@ -217,6 +234,9 @@ fn zoomed_out_previews_stay_on_the_cpu() {
     let Some(rs) = render_state() else { return };
     // Big enough for a reduced proxy when zoomed out.
     let (mut h, _) = harness_sized(rs, 4.0, true, [3000, 2400]);
+    if !gpu_path(&h) {
+        return;
+    }
     settle(&mut h, |app| on_gpu(app, 0));
     h.state_mut().ui.views[0].zoom = 0.25;
     settle(&mut h, |app| app.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
@@ -230,6 +250,9 @@ fn ok_keeps_the_preview_until_the_job_lands_and_cancel_restores() {
     let _guard = photocraft_testkit::gpu_lock();
     let Some(rs) = render_state() else { return };
     let (mut h, id) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
     settle(&mut h, |app| on_gpu(app, 0));
     let revision = h.state().session.active().unwrap().revision;
     crate::dialogs::confirm(h.state_mut(), id).unwrap();
@@ -268,6 +291,9 @@ fn closing_the_document_releases_its_operator() {
     let _guard = photocraft_testkit::gpu_lock();
     let Some(rs) = render_state() else { return };
     let (mut h, _) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
     settle(&mut h, |app| on_gpu(app, 0));
     let doc = h.state().session.active().unwrap().doc.id;
     assert!(h.state().gpu.as_ref().unwrap().has_operators(doc));
@@ -285,6 +311,9 @@ fn a_mirrored_view_leaves_the_gpu_preview() {
     let _guard = photocraft_testkit::gpu_lock();
     let Some(rs) = render_state() else { return };
     let (mut h, _) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
     settle(&mut h, |app| on_gpu(app, 0));
     h.state_mut().ui.view.flip_horizontal = true;
     h.run_steps(4);
@@ -299,6 +328,9 @@ fn another_documents_view_keeps_the_committing_preview() {
     let _guard = photocraft_testkit::gpu_lock();
     let Some(rs) = render_state() else { return };
     let (mut h, id) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
     settle(&mut h, |app| on_gpu(app, 0));
     h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
     // The blurred document stays active; the new one is only asked about by a view.
