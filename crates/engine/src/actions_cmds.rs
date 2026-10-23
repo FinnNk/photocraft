@@ -1289,6 +1289,34 @@ mod tests {
         let result = replay.execute("actions.play", json!({"action": 0})).unwrap();
         assert!(result.get("failed").is_none(), "{result}");
         assert_eq!(replay.active().unwrap().doc.layers.len(), before + 1, "one copy");
+        // Copying a group holding a layer named like the target: the new copy's contents (made
+        // before the step is recorded) don't count, so the occurrence matches the replay.
+        let build_copy = |s: &mut Session| {
+            s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+            s.execute("layer.new.layer", json!({"name": "Twin"})).unwrap();
+            s.execute("layer.groupLayers", json!({})).unwrap();
+            let group = s.active().unwrap().active_layer.unwrap();
+            let a = photocraft_doc::LayerId(s.execute("layer.new.layer", json!({"name": "Twin"})).unwrap()["layer"].as_u64().unwrap());
+            let b = photocraft_doc::LayerId(s.execute("layer.new.layer", json!({"name": "Twin"})).unwrap()["layer"].as_u64().unwrap());
+            s.execute("layer.select", json!({"layer": group.0, "mode": "replace"})).unwrap();
+            (group, a, b)
+        };
+        let mut gc = Session::new();
+        let (group, a, _) = build_copy(&mut gc);
+        gc.execute("actions.record", json!({"name": "Copy group"})).unwrap();
+        // Below `a`: the copy's "Twin" then comes before `a` in document order.
+        gc.execute("layer.moveTo", json!({"layer": group.0, "target": a.0, "position": "below", "copy": true})).unwrap();
+        gc.execute("actions.stop", json!({})).unwrap();
+        let saved = serde_json::to_string(&gc.actions.list).unwrap();
+        let mut replay = Session::new();
+        replay.actions.list = serde_json::from_str(&saved).unwrap();
+        let (_, a2, _) = build_copy(&mut replay);
+        let result = replay.execute("actions.play", json!({"action": 0})).unwrap();
+        assert!(result.get("failed").is_none(), "{result}");
+        let layers = &replay.active().unwrap().doc.layers;
+        let at = layers.iter().position(|l| l.id == a2).unwrap();
+        let below = at.checked_sub(1).and_then(|i| layers.get(i)).map(|l| l.name.as_str());
+        assert_eq!(below, Some("Group 1 copy"), "the copy landed below the same Twin");
         // A drag of several layers keeps its ids (not covered by name).
         s.execute("actions.record", json!({"name": "Several"})).unwrap();
         s.execute("layer.moveTo", json!({"layers": [ids[2].0, ids[3].0], "target": ids[1].0, "position": "above"})).unwrap();

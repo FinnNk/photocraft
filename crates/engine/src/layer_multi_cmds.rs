@@ -159,9 +159,11 @@ fn recorded_move(s: &Session, mut p: Value, pre_selected: Option<&[LayerId]>) ->
     }
     let Some(id) = p.get("target").and_then(Value::as_u64).map(LayerId) else { return p };
     let Some(layer) = st.doc.layer(id) else { return p };
-    // A copy leaves its source where it is (it may even land beside it), so nothing is left out.
+    // A copy leaves its source where it is (it may even land beside it), so the source stays a
+    // candidate; the new copy (the active layer once the step has run, which is when it is
+    // recorded) is left out instead, as it doesn't exist yet when the step replays.
     let copy = p.get("copy").and_then(Value::as_bool).unwrap_or(false);
-    let skip = if copy { None } else { moved };
+    let skip = if copy { st.active_layer.filter(|a| Some(*a) != moved) } else { moved };
     let matches = same_named_targets(&st.doc, &layer.name, skip.as_slice());
     let Some(occurrence) = matches.iter().position(|candidate| *candidate == id) else { return p };
     if let Some(fields) = p.as_object_mut() {
