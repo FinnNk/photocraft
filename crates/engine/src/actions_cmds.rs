@@ -1167,6 +1167,61 @@ mod tests {
         }
     }
 
+    /// #7845: dragging a layer in the Layers panel while recording keeps the drop target by name,
+    /// so the action plays on another document (whose layer ids differ) instead of failing with
+    /// "no such layer". The reporter's steps, replayed on a new document.
+    #[test]
+    fn recorded_layer_drag_replays_on_another_document() {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 16, "height": 16, "depth": depth})).unwrap();
+            s.execute("actions.record", json!({"name": "Retouch"})).unwrap();
+            s.execute("layer.stampVisible", json!({})).unwrap();
+            let layer1 = s.active().unwrap().active_layer.unwrap();
+            s.execute("layer.new.layerViaCopy", json!({})).unwrap();
+            let layer2 = s.active().unwrap().active_layer.unwrap();
+            s.execute("layer.select", json!({"layer": layer1.0, "mode": "replace"})).unwrap();
+            s.execute("filter.noise.median", json!({"radius": 6})).unwrap();
+            s.execute("layer.new.layerViaCopy", json!({})).unwrap();
+            let copy = s.active().unwrap().active_layer.unwrap();
+            s.execute("layer.moveTo", json!({"layer": copy.0, "target": layer2.0, "position": "above"})).unwrap();
+            s.execute("actions.stop", json!({})).unwrap();
+            let (id, step) = s.actions.list[0].steps.last().unwrap();
+            assert_eq!((id.as_str(), step), ("layer.moveTo", &json!({"target": "Layer 1 copy", "position": "above"})));
+            let names = |s: &Session| s.active().unwrap().doc.layers.iter().rev().map(|l| l.name.clone()).collect::<Vec<_>>();
+            let recorded = names(&s);
+            let saved = serde_json::to_string(&s.actions.list).unwrap();
+            let mut replay = Session::new();
+            replay.actions.list = serde_json::from_str(&saved).unwrap();
+            replay.execute("file.new", json!({"width": 16, "height": 16, "depth": depth})).unwrap();
+            let result = replay.execute("actions.play", json!({"action": 0})).unwrap();
+            assert!(result.get("failed").is_none(), "{depth}: {result}");
+            assert_eq!(names(&replay), recorded, "{depth}: the same stack");
+        }
+        // Several layers of the drop target's name: the recorded occurrence picks the right one.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "Twin"})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "Twin"})).unwrap();
+        let upper = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.new.layer", json!({"name": "Mover"})).unwrap();
+        let mover = s.active().unwrap().active_layer.unwrap();
+        s.execute("actions.record", json!({"name": "Drop"})).unwrap();
+        s.execute("layer.moveTo", json!({"layer": mover.0, "target": upper.0, "position": "below"})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        assert_eq!(s.actions.list[0].steps[0].1, json!({"target": "Twin", "targetOccurrence": 1, "position": "below"}));
+        // Bad targets are errors, not panics.
+        for bad in [
+            json!({"target": "Nobody"}),
+            json!({"target": "Twin"}),
+            json!({"target": "Twin", "targetOccurrence": 9}),
+            json!({"target": "Twin", "targetOccurrence": -1}),
+            json!({"target": true}),
+        ] {
+            assert!(s.execute("layer.moveTo", bad.clone()).is_err(), "{bad}");
+        }
+    }
+
     /// An Alt-drag copy records `inPlace` (#7200), which only matters for an artboard: a plain
     /// layer's recorded copy must still export to .atn, while an artboard's must be refused rather
     /// than exported as a copy beside the original.
