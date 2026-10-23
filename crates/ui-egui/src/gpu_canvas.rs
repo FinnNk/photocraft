@@ -1261,8 +1261,8 @@ fn texel_bytes(format: wgpu::TextureFormat) -> u64 {
     if format == FORMAT_HIGH { 8 } else { 4 }
 }
 
-/// Straight-alpha f32 RGBA → premultiplied texels of `format`.
-fn texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Vec<u8> {
+/// Straight-alpha f32 RGBA → premultiplied texels of `format` (public for `interactive_bench`).
+pub fn texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Vec<u8> {
     let mut out = Vec::new();
     texels_into(format, px, &mut out);
     out
