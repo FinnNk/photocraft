@@ -312,7 +312,9 @@ fn main() {
     }
     // The same preview resident on the GPU (#5772, Phase 1): a layer operator blurs the layer's
     // pages and the compositor draws a 1920×1080 view of it. Per slider change, waited on.
-    if b.gpu.is_some() {
+    // Only where the adapter runs layer operators: else the render falls back to a CPU composite
+    // without the blur, and the rows would time that.
+    if b.gpu.as_mut().is_some_and(|g| g.comp.operators_supported(&g.device)) {
         let st = s.active().expect("doc");
         let (doc, target) = (st.doc.clone(), st.active_layer.expect("layer"));
         let view = Rect::from_xywh(w as i32 / 2 - 960, h as i32 / 2 - 540, 1920, 1080);

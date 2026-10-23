@@ -139,7 +139,8 @@ pub fn ineligible(app: &PhotocraftApp, idx: usize, params: &Value) -> Option<&'s
     if !gpu_view(app, idx) {
         return Some("the view is mirrored or pixel-aspect corrected");
     }
-    if !gpu.supports(doc) || !gpu.operators_supported() {
+    // A canvas past the texture budget draws on the CPU, which can't show operators.
+    if !gpu.fits_canvas(doc) || !gpu.supports(doc) || !gpu.operators_supported() {
         return Some("the GPU compositor can't draw it");
     }
     None
@@ -323,6 +324,11 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
     let k = crate::canvas::filter_preview_factor(app, &app.session.documents().get(idx)?.doc, COMMAND, &params);
     if k > 1 {
         hide_main(app);
+        // Checked here too: the session may have started at 100 %, where it didn't matter.
+        if !photocraft_compose::proxy::proxy_faithful(&app.session.documents().get(idx)?.doc) {
+            hide_proxy(app);
+            return None;
+        }
         return update_proxy(app, idx, k, &params, h);
     }
     hide_proxy(app);

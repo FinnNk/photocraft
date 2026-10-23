@@ -659,3 +659,69 @@ fn the_navigator_shows_the_gpu_preview() {
     let (_, key4) = navigator_doc(h.state_mut(), 0).unwrap();
     assert_ne!(key4, key);
 }
+
+/// A session started at 100 % on a document whose reduced proxy isn't faithful (a vector mask on
+/// another layer) leaves the GPU when the view zooms out, rather than preview on that proxy.
+#[test]
+fn zooming_out_on_an_unfaithful_proxy_leaves_the_gpu_preview() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, _) = harness_sized(rs, 4.0, true, [3000, 2400]);
+    h.state_mut()
+        .session
+        .edit("Masked", |doc, _| {
+            use photocraft_doc::vector::{Path, Subpath, VectorMask};
+            let mut l = photocraft_doc::Layer::raster("masked", doc.pixel_format());
+            l.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(2100, 1600, 2900, 2300), &[1.0, 1.0, 0.0, 1.0]);
+            l.vector_mask = Some(VectorMask::new(Path::new(vec![Subpath::polygon(&[(2200.0, 1700.0), (2800.0, 1700.0), (2800.0, 2200.0)])])));
+            // Below the target, so the target stays active.
+            doc.layers.insert(0, l);
+            Ok(())
+        })
+        .unwrap();
+    if !gpu_path(&h) {
+        return;
+    }
+    assert!(!photocraft_compose::proxy::proxy_faithful(&h.state().session.active().unwrap().doc));
+    settle(&mut h, |app| on_gpu(app, 0));
+    h.state_mut().ui.views[0].zoom = 0.25;
+    settle(&mut h, |app| !on_gpu(app, 0) && app.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
+    let g = h.state().filter_gpu_preview.as_ref().and_then(|p| p.proxy.as_ref());
+    assert!(g.is_none_or(|g| g.shown.is_none()), "no GPU proxy preview");
+}
+
+/// A canvas past the GPU texture budget draws on the CPU canvas, which can't show operators: the
+/// CPU preview runs.
+#[test]
+fn a_canvas_past_the_texture_budget_keeps_the_cpu_preview() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (h, _) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    h.state().gpu.as_ref().unwrap().set_canvas_budget(1);
+    assert_eq!(ineligible(h.state(), 0, &json!({"radius": 4.0})), Some("the GPU compositor can't draw it"));
+}
+
+/// With View › Pattern Preview on, a 100 % CPU filter preview on the GPU canvas uploads the whole
+/// result: the pattern's copies sample the texture beyond the view.
+#[test]
+fn pattern_preview_uploads_the_whole_cpu_filter_preview() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    // A reach past the GPU's limit: the CPU previews.
+    let (mut h, _) = harness(rs, 1000.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    let done = |app: &mut PhotocraftApp| app.filter_preview.as_ref().is_some_and(|p| p.result.is_some() && !p.uploaded.is_empty());
+    settle(&mut h, done);
+    let p = h.state().filter_preview.as_ref().unwrap();
+    let whole = p.result.as_ref().unwrap().bounds();
+    assert!(!p.uploaded.contains_rect(&whole), "the view alone is uploaded at first");
+    h.state_mut().ui.view.pattern_preview = true;
+    h.run_steps(3);
+    let p = h.state().filter_preview.as_ref().unwrap();
+    assert!(p.uploaded.contains_rect(&whole), "uploaded {:?} of {:?}", p.uploaded, whole);
+}
