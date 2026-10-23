@@ -510,6 +510,9 @@ pub struct Compositor {
     /// What each operator page (`Role::Operator*`) was made from: a fingerprint of the program,
     /// its window and the source tiles it read. A page with another fingerprint is redrawn.
     op_made: HashMap<ResKey, u64>,
+    /// The selection each operator mask page was made from: held while the page is, so no other
+    /// selection can take its address (which the page's fingerprint hashes).
+    op_pins: HashMap<ResKey, Arc<Surface>>,
     /// The operators of the document the current refresh draws.
     frame_ops: Vec<LayerOperator>,
     /// The blur passes' two scratch textures, reused from cell to cell and step to step (made
@@ -801,6 +804,7 @@ impl Compositor {
             operators: HashMap::new(),
             op_kit: None,
             op_made: HashMap::new(),
+            op_pins: HashMap::new(),
             frame_ops: Vec::new(),
             op_scratch: None,
             frame_region: Rect::EMPTY,
@@ -1204,6 +1208,7 @@ impl Compositor {
         self.prefix.clear();
         self.residents.clear();
         self.op_made.clear();
+        self.op_pins.clear();
         self.op_scratch = None;
         self.fx.clear();
         self.patterns.clear();
@@ -1406,6 +1411,7 @@ impl Compositor {
         // Fingerprints of operator pages that were evicted or dropped.
         let residents = &self.residents;
         self.op_made.retain(|k, _| residents.contains_key(k));
+        self.op_pins.retain(|k, _| residents.contains_key(k));
         self.fx.retain(|(id, _), e| e.doc != doc.id || e.last_used == frame || live.contains(id));
         stats.evicted += self.evict().0;
         self.temps.retain(|(_, used)| frame.saturating_sub(*used) < 240);
@@ -1962,6 +1968,7 @@ impl Compositor {
                 let resident = self.operator_resident(texture, *sr, surface, doc);
                 self.residents.insert(mk, resident);
                 self.op_made.insert(mk, print);
+                self.op_pins.insert(mk, Arc::clone(sel));
                 changed = true;
             }
         }
