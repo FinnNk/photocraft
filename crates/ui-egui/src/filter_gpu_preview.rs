@@ -232,6 +232,14 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             window: std::cell::Cell::new(None),
         });
     }
+    // The GPU canvas can stop drawing this document mid-session (a smaller canvas budget, a
+    // compositor that failed or was lost): it couldn't show the operator any more, so the CPU
+    // preview takes over, as after a failed refresh.
+    let drawable = app.session.documents().get(idx).is_some_and(|st| app.gpu.as_ref().is_some_and(|g| g.fits_canvas(&st.doc) && g.operators_supported()));
+    if !drawable && let Some(p) = app.filter_gpu_preview.as_mut().filter(|p| !p.failed && !p.committing) {
+        log::debug!("filter preview on the CPU: the GPU canvas can't draw it any more");
+        p.failed = true;
+    }
     let p = app.filter_gpu_preview.as_ref()?;
     if p.failed {
         // Hold the last GPU preview until the CPU's is ready.
@@ -268,6 +276,15 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         p.shown = Some((h, op));
     }
     app.filter_gpu_preview.as_ref()
+}
+
+/// Register the session's shown operator again: after Retry GPU, the new canvas has none (they
+/// lived in the old one's resources), and with unchanged settings `update` wouldn't set them.
+pub(crate) fn rebind(app: &mut PhotocraftApp) {
+    let Some(p) = app.filter_gpu_preview.as_ref() else { return };
+    if let (Some(gpu), Some((_, op))) = (app.gpu.as_ref(), p.shown.as_ref()) {
+        gpu.set_operators(p.s.doc, vec![op.clone()]);
+    }
 }
 
 /// Show nothing for the session (its operators cleared on its own document), keeping it for the

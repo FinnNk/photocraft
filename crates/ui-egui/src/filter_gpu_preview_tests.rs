@@ -389,3 +389,19 @@ fn another_active_document_leaves_the_committing_session() {
     settle(&mut h, |app| on_gpu(app, other));
     assert!(!h.state().gpu.as_ref().unwrap().has_operators(doc), "the applied document's operator is gone");
 }
+
+/// The canvas budget shrinking mid-session (the canvas then draws on the CPU, which can't show the
+/// operator): the session fails over to the CPU preview instead of hiding it.
+#[test]
+fn a_canvas_that_stops_fitting_mid_session_falls_back_to_the_cpu() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, _) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    settle(&mut h, |app| on_gpu(app, 0));
+    h.state().gpu.as_ref().unwrap().set_canvas_budget(1);
+    assert!(!on_gpu(h.state_mut(), 0), "the CPU preview takes over");
+    assert!(h.state().filter_gpu_preview.as_ref().is_some_and(|p| p.failed));
+}
