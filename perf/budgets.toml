@@ -659,6 +659,7 @@ title = "Unsharp Mask dialog slider step r 4, GPU resident, 36 MP, 1920x1080 vie
 issue = 5772
 bench = "interactive_bench"
 row = "Unsharp Mask dialog preview r 4 (GPU resident)"
+budget_ms = 16
 
 [[scenario]]
 id = "P75"
@@ -666,6 +667,7 @@ title = "Unsharp Mask dialog slider step r 40, GPU resident, 36 MP, 1920x1080 vi
 issue = 5772
 bench = "interactive_bench"
 row = "Unsharp Mask dialog preview r 40 (GPU resident)"
+budget_ms = 16
 
 [[scenario]]
 id = "P76"
