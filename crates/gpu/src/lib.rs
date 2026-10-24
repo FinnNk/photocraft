@@ -524,6 +524,9 @@ pub struct Compositor {
     /// The blur passes' two scratch textures, reused from cell to cell and step to step (made
     /// anew each time, they cost their allocation and clearing on every slider step).
     op_scratch: Option<([u32; 2], [wgpu::Texture; 2])>,
+    /// Bytes of a scratch set being made (the textures made so far): counted against the
+    /// resident budget with `op_scratch` until the set is complete.
+    scratch_making: u64,
     /// The part of the canvas the current refresh draws (tile aligned): operators compute only
     /// their output there.
     frame_region: Rect,
@@ -872,6 +875,7 @@ impl Compositor {
             op_pins: HashMap::new(),
             frame_ops: Vec::new(),
             op_scratch: None,
+            scratch_making: 0,
             frame_region: Rect::EMPTY,
         }
         .with_texture_limit(device.limits().max_texture_dimension_2d);
@@ -1139,6 +1143,10 @@ impl Compositor {
     /// Drop GPU textures of a closed document.
     pub fn forget_doc(&mut self, doc: DocId) {
         self.operators.remove(&doc);
+        // The last document with operators: their scratch textures go too.
+        if self.operators.is_empty() {
+            self.op_scratch = None;
+        }
         self.residents.retain(|_, r| r.doc != doc);
         let residents = &self.residents;
         self.op_made.retain(|k, _| residents.contains_key(k));
@@ -1613,7 +1621,9 @@ impl Compositor {
         let pages: Vec<(u64, ResKey, u64)> =
             self.residents.iter().filter(|(k, r)| r.stamp != stamp && Some(**k) != keep).map(|(k, r)| (r.stamp, *k, r.bytes())).collect();
         let (mut n, mut freed) = (0, 0u64);
-        for k in lru_victims(pages, self.resident_bytes(), incoming, budget) {
+        // The operators' scratch textures (held, or being made) share the budget with the pages.
+        let held = self.resident_bytes().saturating_add(self.operator_scratch_bytes()).saturating_add(self.scratch_making);
+        for k in lru_victims(pages, held, incoming, budget) {
             if let Some(r) = self.residents.remove(&k) {
                 n += 1;
                 freed += r.bytes();
@@ -2147,18 +2157,25 @@ impl Compositor {
             let size = [sub.width(), sub.height()];
             if self.op_scratch.as_ref().is_none_or(|(s, _)| s[0] < size[0] || s[1] < size[1]) {
                 let grown = self.op_scratch.as_ref().map_or(size, |(s, _)| [s[0].max(size[0]), s[1].max(size[1])]);
-                // Within the budget and its fallback, as layer pages are (the old pair goes first).
+                // Within the budget and its fallback, as layer pages are: the old pair goes first,
+                // room is made for the whole new pair, and each texture counts once made.
                 self.op_scratch = None;
-                let mut make = |s: &mut Self, label| {
-                    s.create_budgeted(
-                        device,
-                        &operator::float_desc(label, grown[0], grown[1]),
-                        bytes(Rect::from_xywh(0, 0, grown[0], grown[1])),
-                        Some(ok),
-                        stats,
-                    )
-                };
-                let (a, b) = (make(self, "pc_operator_a")?, make(self, "pc_operator_b")?);
+                let each = bytes(Rect::from_xywh(0, 0, grown[0], grown[1]));
+                let (n, dropped) = self.evict_residents(self.resident_budget, each.saturating_mul(2), Some(ok));
+                stats.evicted += n;
+                self.admit_freed = self.admit_freed.saturating_add(dropped);
+                let mut made = Vec::with_capacity(2);
+                for label in ["pc_operator_a", "pc_operator_b"] {
+                    let texture = self.create_budgeted(device, &operator::float_desc(label, grown[0], grown[1]), each, Some(ok), stats);
+                    let Some(texture) = texture else {
+                        self.scratch_making = 0;
+                        return None;
+                    };
+                    self.scratch_making = self.scratch_making.saturating_add(each);
+                    made.push(texture);
+                }
+                self.scratch_making = 0;
+                let [a, b]: [wgpu::Texture; 2] = made.try_into().ok()?;
                 self.op_scratch = Some((grown, [a, b]));
             }
             let Some(source) = self.residents.get(&wk).map(|r| r.texture.clone()) else {
