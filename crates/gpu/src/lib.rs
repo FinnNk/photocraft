@@ -1023,6 +1023,11 @@ impl Compositor {
         self.residents.values().map(Resident::bytes).sum()
     }
 
+    /// GPU memory held by the layer operators' scratch textures (bytes).
+    pub fn operator_scratch_bytes(&self) -> u64 {
+        self.op_scratch.as_ref().map_or(0, |(s, t)| u64::from(s[0]) * u64::from(s[1]) * 16 * t.len() as u64)
+    }
+
     /// GPU memory held by cached pattern textures (bytes).
     pub fn pattern_cache_bytes(&self) -> u64 {
         self.patterns.values().map(|p| p.bytes).sum()
@@ -1110,15 +1115,19 @@ impl Compositor {
     /// layer unfiltered) when the device can't run them or their pages don't fit.
     pub fn set_operators(&mut self, doc: DocId, operators: Vec<LayerOperator>) {
         if operators.is_empty() {
-            self.operators.remove(&doc);
+            self.clear_operators(doc);
         } else {
             self.operators.insert(doc, operators);
         }
     }
 
-    /// [`Self::set_operators`] with none: the layers show their own pixels again.
+    /// [`Self::set_operators`] with none: the layers show their own pixels again. With no
+    /// operator left anywhere, their scratch textures go too.
     pub fn clear_operators(&mut self, doc: DocId) {
         self.operators.remove(&doc);
+        if self.operators.is_empty() {
+            self.op_scratch = None;
+        }
     }
 
     /// Whether `device` can run layer operators (compute passes into float storage textures).
@@ -1621,7 +1630,22 @@ impl Compositor {
         stats: &mut Stats,
     ) -> Option<wgpu::Texture> {
         let replaced = self.residents.get(&key).map_or(0, Resident::bytes);
-        let (n, dropped) = self.evict_residents(self.resident_budget, bytes.saturating_sub(replaced), Some(key));
+        self.create_budgeted(device, desc, bytes.saturating_sub(replaced), Some(key), stats)
+    }
+
+    /// A texture of `bytes` within the resident budget: pages not used this refresh are evicted to
+    /// make room (never `keep`), and once more after an out-of-memory error. A failure sets
+    /// `layer_alloc` (the refresh falls back to the CPU) rather than reaching the device's
+    /// uncaptured-error handler.
+    fn create_budgeted(
+        &mut self,
+        device: &wgpu::Device,
+        desc: &wgpu::TextureDescriptor<'_>,
+        bytes: u64,
+        keep: Option<ResKey>,
+        stats: &mut Stats,
+    ) -> Option<wgpu::Texture> {
+        let (n, dropped) = self.evict_residents(self.resident_budget, bytes, keep);
         stats.evicted += n;
         self.admit_freed = self.admit_freed.saturating_add(dropped);
         // WebGPU reports errors asynchronously: its failures reach the health callbacks.
@@ -1633,7 +1657,7 @@ impl Compositor {
             match error {
                 None => return Some(texture),
                 Some(wgpu::Error::OutOfMemory { .. }) if !retry => {
-                    let (n, dropped) = self.evict_residents(0, 0, Some(key));
+                    let (n, dropped) = self.evict_residents(0, 0, keep);
                     stats.evicted += n;
                     self.admit_freed = self.admit_freed.saturating_add(dropped);
                 }
@@ -2117,8 +2141,19 @@ impl Compositor {
             let size = [sub.width(), sub.height()];
             if self.op_scratch.as_ref().is_none_or(|(s, _)| s[0] < size[0] || s[1] < size[1]) {
                 let grown = self.op_scratch.as_ref().map_or(size, |(s, _)| [s[0].max(size[0]), s[1].max(size[1])]);
-                let make = |label| operator::float_texture(device, label, grown[0], grown[1]);
-                self.op_scratch = Some((grown, [make("pc_operator_a"), make("pc_operator_b")]));
+                // Within the budget and its fallback, as layer pages are (the old pair goes first).
+                self.op_scratch = None;
+                let mut make = |s: &mut Self, label| {
+                    s.create_budgeted(
+                        device,
+                        &operator::float_desc(label, grown[0], grown[1]),
+                        bytes(Rect::from_xywh(0, 0, grown[0], grown[1])),
+                        Some(ok),
+                        stats,
+                    )
+                };
+                let (a, b) = (make(self, "pc_operator_a")?, make(self, "pc_operator_b")?);
+                self.op_scratch = Some((grown, [a, b]));
             }
             let Some(source) = self.residents.get(&wk).map(|r| r.texture.clone()) else {
                 // Evicted making room for the output: the refresh goes to the CPU.

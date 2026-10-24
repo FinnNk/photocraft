@@ -3779,8 +3779,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 hdr: hdr_preview(app, &doc),
                 offset: [0.0, 0.0],
             };
-            // The filter dialog's preview window draws a zoomed-out GPU preview from here too.
-            app.canvas_gpu.insert(doc.id, params);
+            // The filter dialog's preview window draws a zoomed-out GPU preview from here too
+            // (the main canvas's: an Arrange tile or a floating window may be on another display).
+            if primary {
+                app.canvas_gpu.insert(doc.id, params);
+            }
             paint_gpu_view(&painter, rect, params, &pattern);
         } else if gpu_ok && ensure_gpu(app, &ctx, idx, redraw_focus(&target_xf, &xf)) {
             on_gpu = true;
@@ -3803,7 +3806,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 hdr: hdr_preview(app, &doc),
                 offset: [0.0, 0.0],
             };
-            app.canvas_gpu.insert(doc.id, params);
+            if primary {
+                app.canvas_gpu.insert(doc.id, params);
+            }
             if app.navigator_plain.contains(&doc.id) {
                 app.navigator_gpu.insert(doc.id, params);
             } else {

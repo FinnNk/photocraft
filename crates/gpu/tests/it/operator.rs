@@ -213,6 +213,22 @@ fn outputs_are_reused_until_the_operator_changes() {
     }
 }
 
+/// The operators' scratch textures go when the last operator does (they grew to the largest
+/// window and stayed for the rest of the session).
+#[test]
+fn scratch_textures_go_with_the_last_operator() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (doc, id) = blur_doc(SampleType::U8);
+    g.comp.set_operators(doc.id, vec![operator(&doc, id, 6.0, false)]);
+    photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+    assert!(g.comp.operator_scratch_bytes() > 0, "the passes made their scratch");
+    g.comp.set_operators(doc.id, Vec::new());
+    assert_eq!(g.comp.operator_scratch_bytes(), 0, "no operator left: no scratch");
+}
+
 #[test]
 fn blur_descriptions_the_passes_cant_run_are_refused() {
     let r = Rect::new(0, 0, 10, 10);
