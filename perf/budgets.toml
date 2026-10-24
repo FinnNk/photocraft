@@ -752,3 +752,4 @@ title = "Apply Image (Overlay, merged source) dialog opacity step, GPU resident,
 issue = 5772
 bench = "interactive_bench"
 row = "Apply Image (Overlay) dialog preview (GPU resident)"
+budget_ms = 16

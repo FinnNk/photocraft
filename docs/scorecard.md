@@ -101,7 +101,7 @@ Baseline: 2026-10-05, commit `f5d2bcb54a`, Apple M4 Pro (48 GB), GPU Apple M4 Pr
 | P82 | Twirl 120° dialog slider step, GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 | P83 | Wave (5 generators) dialog slider step, GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 | P84 | Lens Blur r 30 (hexagon, Specular Highlights) dialog slider step, GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
-| P85 | Apply Image (Overlay, merged source) dialog opacity step, GPU resident, 36 MP, 1920x1080 view | track only | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
+| P85 | Apply Image (Overlay, merged source) dialog opacity step, GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 
 **Not measurable yet** (the code can't do it yet; no number is recorded):
 
