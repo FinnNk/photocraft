@@ -348,6 +348,40 @@ fn main() {
                 b.render(&doc, view)
             });
         }
+        // Unsharp Mask (Phase 4): the exact blur and its combine, per slider step.
+        let unsharp = |radius: f32| {
+            let fp = photocraft_algo::FilterParams::UnsharpMask { amount: 150.0, radius, threshold: 0.0 };
+            let content = doc.layer(target).and_then(|l| l.surface()).map(|s| s.content_bounds()).unwrap_or(Rect::EMPTY);
+            let area = photocraft_algo::output_area(&fp, content, doc.bounds(), None);
+            let extent = photocraft_algo::separable::edge_extent(doc.bounds(), content);
+            let Some(photocraft_algo::separable::Separable::Kernel(k)) = photocraft_algo::separable::Separable::of(&fp) else { panic!("the exact kernel") };
+            let program = photocraft_gpu::GaussianBlur::new(photocraft_gpu::SeparableBlur::Kernel(k), extent, area, None, false, doc.depth)
+                .and_then(|b| b.unsharp(150.0, 0.0))
+                .expect("a runnable unsharp mask");
+            photocraft_gpu::LayerOperator { layer: target, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
+        };
+        for radius in [4.0f32, 40.0] {
+            if let Some(g) = &mut b.gpu {
+                g.comp.set_operators(doc.id, vec![unsharp(radius)]);
+            }
+            let first = b.render(&doc, view);
+            println!("  (GPU-resident Unsharp Mask r {radius}: first frame with the window upload {first:.1} ms)");
+            let mut step = 0;
+            b.time(&format!("Unsharp Mask dialog preview r {radius} (GPU resident)"), |b| {
+                step += 1;
+                if let Some(g) = &mut b.gpu {
+                    g.comp.set_operators(doc.id, vec![unsharp(radius + (step % 2) as f32)]);
+                }
+                b.render(&doc, view)
+            });
+            // What the CPU preview runs instead at 100 %: the filter over the whole layer.
+            let surf = doc.layer(target).and_then(|l| l.surface()).expect("surface");
+            let fp = photocraft_algo::FilterParams::UnsharpMask { amount: 150.0, radius, threshold: 0.0 };
+            let t = Instant::now();
+            let content = surf.content_bounds();
+            std::hint::black_box(photocraft_algo::apply(surf, &fp, photocraft_algo::output_area(&fp, content, doc.bounds(), None), doc.bounds(), None));
+            println!("  (the CPU's Unsharp Mask r {radius} over the whole layer: {:.0} ms)", ms(t));
+        }
         if let Some(g) = &mut b.gpu {
             g.comp.clear_operators(doc.id);
         }

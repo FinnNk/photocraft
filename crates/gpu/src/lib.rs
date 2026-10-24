@@ -56,7 +56,7 @@ use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
 
 pub use health::{DeviceHealth, Fault};
-pub use operator::{GaussianBlur, LayerOperator, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur};
+pub use operator::{Combine, GaussianBlur, LayerOperator, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
 
@@ -2149,6 +2149,7 @@ impl Compositor {
                     keep_alpha: blur.keep_alpha,
                     levels: operator::levels(blur.depth),
                     has_alpha: fmt.alpha,
+                    combine: blur.combine,
                 },
             );
             self.recorded += 1;

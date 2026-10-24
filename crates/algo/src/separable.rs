@@ -19,14 +19,17 @@ pub enum Separable {
 }
 
 impl Separable {
-    /// The blur `params` runs on the CPU, or `None` for a filter that isn't one (only Gaussian
-    /// Blur so far). Small radii use the exact kernel, larger ones three box passes.
+    /// The blur `params` runs on the CPU, or `None` for a filter that isn't one (Gaussian Blur,
+    /// and the blur inside Unsharp Mask). Gaussian Blur's small radii use the exact kernel and
+    /// larger ones three box passes; Unsharp Mask always blurs with the exact kernel
+    /// (`sharpen::exact`).
     pub fn of(params: &FilterParams) -> Option<Self> {
         match *params {
             FilterParams::GaussianBlur { radius } => Some(match blur::box_widths(params) {
                 Some(boxes) => Separable::Boxes(boxes),
                 None => Separable::Kernel(blur::gaussian_kernel(radius)),
             }),
+            FilterParams::UnsharpMask { radius, .. } if radius.is_finite() && radius >= 0.0 => Some(Separable::Kernel(blur::gaussian_kernel(radius))),
             _ => None,
         }
     }
@@ -184,5 +187,18 @@ mod tests {
         assert_eq!(OperatorRegion { reach: 5, extent }.input(Rect::new(400, 400, 410, 410)), Rect::EMPTY, "out of reach of the extent");
         assert_eq!(OperatorRegion { reach: -3, extent }.input(Rect::new(10, 10, 20, 20)), Rect::new(10, 10, 20, 20));
         assert_eq!(edge_extent(extent, Rect::new(-10, 50, 20, 60)), Rect::new(-10, 0, 300, 200));
+    }
+
+    /// Unsharp Mask's blur is always the exact kernel `sharpen::exact` uses, whatever the radius
+    /// (Gaussian Blur's larger radii are box passes); a radius that isn't one has none.
+    #[test]
+    fn unsharp_mask_blurs_with_the_exact_kernel() {
+        for radius in [0.5f32, 4.0, 40.0, 250.0] {
+            let p = FilterParams::UnsharpMask { amount: 100.0, radius, threshold: 0.0 };
+            assert_eq!(Separable::of(&p), Some(Separable::Kernel(blur::gaussian_kernel(radius))), "radius {radius}");
+        }
+        for radius in [-1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(Separable::of(&FilterParams::UnsharpMask { amount: 100.0, radius, threshold: 0.0 }), None);
+        }
     }
 }

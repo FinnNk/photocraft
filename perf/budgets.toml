@@ -652,3 +652,17 @@ title = "Gaussian Blur dialog slider step r 250, GPU resident, zoomed out (proxy
 issue = 5772
 bench = "interactive_bench"
 row = "Gaussian Blur dialog preview r 250 (GPU resident, zoomed out)"
+
+[[scenario]]
+id = "P74"
+title = "Unsharp Mask dialog slider step r 4, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Unsharp Mask dialog preview r 4 (GPU resident)"
+
+[[scenario]]
+id = "P75"
+title = "Unsharp Mask dialog slider step r 40, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Unsharp Mask dialog preview r 40 (GPU resident)"
