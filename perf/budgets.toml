@@ -617,6 +617,7 @@ title = "Filter dialog preview canvas upload at k 1, 36 MP, 1920x1080 view (disp
 issue = 5772
 bench = "interactive_bench"
 row = "filter preview canvas upload, k 1 (view, display + texels)"
+budget_ms = 16
 
 [[scenario]]
 id = "P69"
@@ -624,3 +625,4 @@ title = "Filter dialog preview window texture at k 1, 36 MP"
 issue = 5772
 bench = "interactive_bench"
 row = "filter preview window texture, k 1"
+budget_ms = 16
