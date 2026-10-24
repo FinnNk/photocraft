@@ -14,6 +14,10 @@ fn doc_white(w: u32, h: u32) -> Document {
     Document::with_background("t", Size::new(w, h), ColorMode::Rgb, SampleType::U8, Color::WHITE)
 }
 
+fn doc_f32(w: u32, h: u32) -> Document {
+    Document::with_background("t", Size::new(w, h), ColorMode::Rgb, SampleType::F32, Color::WHITE)
+}
+
 #[test]
 fn prepared_tones_match_fresh_tables_and_stay_bounded() {
     use photocraft_doc::adjust::ToneSpace;
@@ -712,7 +716,7 @@ fn clipped_adjustment_changes_only_its_base() {
     adj.clipped = true;
     d.layers.push(adj);
     assert_eq!(change_bounds(&d.layers[3], canvas), None);
-    assert_eq!(change_bounds_in(&d.layers, 3, None, canvas), Some(base_rect));
+    assert_eq!(change_bounds_in(&d.layers, 3, None, canvas, SampleType::U8), Some(base_rect));
     // Every pixel the toggle changes lies inside those bounds.
     let shown = render(&d, canvas);
     d.layers[3].visible = false;
@@ -728,24 +732,24 @@ fn clipped_adjustment_changes_only_its_base() {
     }
     assert_eq!(changed, base_rect);
     // Other layers keep their own bounds.
-    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas), Some(Rect::new(3, 2, 4, 3)));
-    assert_eq!(change_bounds_in(&d.layers, 9, None, canvas), None);
+    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas, SampleType::U8), Some(Rect::new(3, 2, 4, 3)));
+    assert_eq!(change_bounds_in(&d.layers, 9, None, canvas, SampleType::U8), None);
 
     // Unclipped, or with no base beneath it, it reaches everything.
     let mut free = d.layers.clone();
     free[3].clipped = false;
-    assert_eq!(change_bounds_in(&free, 3, None, canvas), None);
+    assert_eq!(change_bounds_in(&free, 3, None, canvas, SampleType::U8), None);
     let orphan = vec![d.layers[3].clone()];
-    assert_eq!(change_bounds_in(&orphan, 0, None, canvas), None);
+    assert_eq!(change_bounds_in(&orphan, 0, None, canvas, SampleType::U8), None);
     // Clipped layers on an adjustment composite atop the adjusted backdrop.
     let on_adj = vec![d.layers[0].clone(), Layer::new("lv", LayerContent::Adjustment(Adjustment::Invert)), d.layers[3].clone()];
-    assert_eq!(change_bounds_in(&on_adj, 2, None, canvas), None);
+    assert_eq!(change_bounds_in(&on_adj, 2, None, canvas, SampleType::U8), None);
     // A pass-through group holding an adjustment is isolated only while it has visible clipped
     // layers, so they change whether its adjustment reaches the layers beneath.
     let mut g = Layer::group("g", vec![solid_layer("in", base_rect, [0.2, 0.4, 0.6, 1.0]), Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert))]);
     g.blend = BlendMode::PassThrough;
     let on_group = vec![d.layers[0].clone(), g, d.layers[3].clone()];
-    assert_eq!(change_bounds_in(&on_group, 2, None, canvas), None);
+    assert_eq!(change_bounds_in(&on_group, 2, None, canvas, SampleType::U8), None);
 }
 
 /// #6535: a clipped adjustment with no base beneath it, inside a pass-through group, composites
@@ -766,12 +770,12 @@ fn orphan_clipped_adjustment_in_pass_through_base_reaches_everything() {
     let shown = px(&d, 0, 0);
     d.layers[2].visible = false;
     assert!(!close4(shown, px(&d, 0, 0)), "the toggle changes pixels outside the group");
-    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas), None);
+    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas, SampleType::U8), None);
     assert_eq!(change_bounds(&d.layers[1], canvas), None);
     // With a base beneath it the clipped adjustment stays inside the group.
     let LayerContent::Group(g) = &mut d.layers[1].content else { panic!("group") };
     g.children.swap(0, 1);
-    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas), Some(Rect::new(2, 1, 4, 3)));
+    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas, SampleType::U8), Some(Rect::new(2, 1, 4, 3)));
 }
 
 /// A pass-through group that is a clip base renders isolated while it holds a visible
@@ -798,11 +802,11 @@ fn clipped_adjustment_in_pass_through_clip_base_reaches_its_group() {
     assert!(!close4(shown, px(&d, 7, 5)), "hiding A changes Q, outside A's base");
     let group = Rect::new(2, 1, 8, 6);
     let LayerContent::Group(g) = &d.layers[2].content else { panic!("group") };
-    assert_eq!(change_bounds_in(&g.children, 1, Some((&d.layers, 2)), canvas), Some(group));
+    assert_eq!(change_bounds_in(&g.children, 1, Some((&d.layers, 2)), canvas, SampleType::U8), Some(group));
     // Not a clip base: the group stays pass-through either way, and A changes only its base.
     d.layers.truncate(3);
     let LayerContent::Group(g) = &d.layers[2].content else { panic!("group") };
-    assert_eq!(change_bounds_in(&g.children, 1, Some((&d.layers, 2)), canvas), Some(Rect::new(2, 1, 4, 3)));
+    assert_eq!(change_bounds_in(&g.children, 1, Some((&d.layers, 2)), canvas, SampleType::U8), Some(Rect::new(2, 1, 4, 3)));
 }
 
 /// The pixels that differ between `d` rendered as it is and with `toggle` applied.
@@ -814,7 +818,7 @@ fn toggled_pixels(d: &Document, canvas: Rect, toggle: impl FnOnce(&mut Document)
     let w = canvas.width() as usize;
     let mut changed = Rect::EMPTY;
     for (i, (a, b)) in shown.px.iter().zip(&hidden.px).enumerate() {
-        if !close4(*a, *b) {
+        if a != b {
             let p = Rect::from_xywh(canvas.x0 + (i % w) as i32, canvas.y0 + (i / w) as i32, 1, 1);
             changed = if changed.is_empty() { p } else { changed.union(&p) };
         }
@@ -836,25 +840,28 @@ fn masked_adjustment_changes_only_its_mask_area() {
         adj.mask = Some(m);
         adj
     };
-    let mut d = doc_white(10, 8);
+    let mut d = doc_f32(10, 8);
     d.layers.push(solid_layer("px", Rect::new(6, 5, 9, 7), [0.2, 0.4, 0.6, 1.0]));
     d.layers.push(masked("inv"));
-    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas), Some(painted));
+    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas, SampleType::F32), Some(painted));
     assert_eq!(toggled_pixels(&d, canvas, |d| d.layers[2].visible = false), painted);
     // The plain per-layer bounds (used by the move and blend previews) are unchanged.
     assert_eq!(change_bounds(&d.layers[2], canvas), None);
+    // At 8 and 16 bits the whole backdrop is rounded after each adjustment, so it isn't bounded.
+    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas, SampleType::U8), None);
+    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas, SampleType::U16), None);
 
     // A pass-through group: its pixels plus its adjustments' masks.
     let px_rect = Rect::new(6, 5, 9, 7);
     let mut g = Layer::group("g", vec![solid_layer("in", px_rect, [0.2, 0.4, 0.6, 1.0]), masked("inv")]);
     g.blend = BlendMode::PassThrough;
-    let mut d2 = doc_white(10, 8);
+    let mut d2 = doc_f32(10, 8);
     d2.layers.push(g);
     let both = painted.union(&px_rect);
-    assert_eq!(change_bounds_in(&d2.layers, 1, None, canvas), Some(both));
+    assert_eq!(change_bounds_in(&d2.layers, 1, None, canvas, SampleType::F32), Some(both));
     assert!(both.contains_rect(&toggled_pixels(&d2, canvas, |d| d.layers[1].visible = false)));
     let LayerContent::Group(inner) = &d2.layers[1].content else { panic!("group") };
-    assert_eq!(change_bounds_in(&inner.children, 1, Some((&d2.layers, 1)), canvas), Some(painted));
+    assert_eq!(change_bounds_in(&inner.children, 1, Some((&d2.layers, 1)), canvas, SampleType::F32), Some(painted));
 
     // Masks that can reach outside the painted area keep the whole-document damage.
     let unbounded = |edit: &dyn Fn(&mut LayerMask)| {
@@ -862,7 +869,7 @@ fn masked_adjustment_changes_only_its_mask_area() {
         if let Some(m) = layers[2].mask.as_mut() {
             edit(m);
         }
-        change_bounds_in(&layers, 2, None, canvas)
+        change_bounds_in(&layers, 2, None, canvas, SampleType::F32)
     };
     assert_eq!(unbounded(&|m| m.enabled = false), None);
     assert_eq!(unbounded(&|m| m.density = 0.5), None);
@@ -871,25 +878,57 @@ fn masked_adjustment_changes_only_its_mask_area() {
     assert_eq!(unbounded(&|m| *m = LayerMask::reveal_all()), None);
     let mut no_mask = d.layers.clone();
     no_mask[2].mask = None;
-    assert_eq!(change_bounds_in(&no_mask, 2, None, canvas), None);
+    assert_eq!(change_bounds_in(&no_mask, 2, None, canvas, SampleType::F32), None);
     // A clip base: the layers clipped to it composite everywhere atop the adjusted backdrop.
     let mut base = d.layers.clone();
     let mut over = solid_layer("over", Rect::new(0, 0, 1, 1), [1.0, 0.0, 0.0, 1.0]);
     over.clipped = true;
     base.push(over);
-    assert_eq!(change_bounds_in(&base, 2, None, canvas), None);
+    assert_eq!(change_bounds_in(&base, 2, None, canvas, SampleType::F32), None);
     // In a pass-through group that is a clip base, which isolates while it holds an adjustment.
     let mut clip_base = d2.layers.clone();
     let mut x = solid_layer("x", Rect::new(0, 0, 1, 1), [1.0, 0.0, 0.0, 1.0]);
     x.clipped = true;
     clip_base.push(x);
     let LayerContent::Group(inner) = &clip_base[1].content else { panic!("group") };
-    assert_eq!(change_bounds_in(&inner.children, 1, Some((&clip_base, 1)), canvas), None);
+    assert_eq!(change_bounds_in(&inner.children, 1, Some((&clip_base, 1)), canvas, SampleType::F32), None);
     // A group holding an unmasked adjustment still reaches everything.
     let mut open = d2.layers.clone();
     let LayerContent::Group(inner) = &mut open[1].content else { panic!("group") };
     inner.children.push(Layer::new("free", LayerContent::Adjustment(Adjustment::Invert)));
-    assert_eq!(change_bounds_in(&open, 1, None, canvas), None);
+    assert_eq!(change_bounds_in(&open, 1, None, canvas, SampleType::F32), None);
+}
+
+/// #6533 review: at 8 and 16 bits the compositor rounds the whole backdrop after every adjustment
+/// layer, so hiding one masked to a single pixel changes pixels outside its mask (a half-level
+/// backdrop rounds differently once inverted twice). The damage must cover every pixel that
+/// changes, compared exactly, at every depth; only at 32 bits is it the mask.
+#[test]
+fn masked_adjustment_damage_covers_integer_rounding() {
+    let canvas = Rect::new(0, 0, 4, 1);
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = Document::with_background("t", Size::new(4, 1), ColorMode::Rgb, depth, Color::BLACK);
+        let mut half = solid_layer("white", canvas, [1.0, 1.0, 1.0, 1.0]);
+        half.opacity = 0.5;
+        d.layers.push(half);
+        let mut masked = Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert));
+        let mut m = LayerMask::hide_all();
+        m.surface.fill_rect(Rect::new(0, 0, 1, 1), &[1.0]);
+        masked.mask = Some(m);
+        d.layers.push(masked);
+        d.layers.push(Layer::new("over", LayerContent::Adjustment(Adjustment::Invert)));
+        let changed = toggled_pixels(&d, canvas, |d| d.layers[2].visible = false);
+        match change_bounds_in(&d.layers, 2, None, canvas, depth) {
+            Some(r) => assert!(r.contains_rect(&changed), "{depth:?}: {changed:?} outside {r:?}"),
+            None => assert_ne!(depth, SampleType::F32),
+        }
+        if depth == SampleType::U8 {
+            assert_eq!(changed, canvas, "the rounding reaches past the mask");
+        }
+        if depth == SampleType::F32 {
+            assert_eq!(change_bounds_in(&d.layers, 2, None, canvas, depth), Some(Rect::new(0, 0, 1, 1)));
+        }
+    }
 }
 
 #[test]

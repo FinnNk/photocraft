@@ -1607,8 +1607,10 @@ pub fn change_bounds(layer: &Layer, canvas: Rect) -> Option<Rect> {
 /// top level): a pass-through group that is a clip base renders isolated while it holds a visible
 /// adjustment, so showing or hiding one inside can change the whole group. An adjustment layer
 /// masked to an area, or a pass-through group holding only such ones, is bounded by its masks
-/// (#6533).
-pub fn change_bounds_in(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>, canvas: Rect) -> Option<Rect> {
+/// (#6533), but only in a 32-bit document (`depth`): at 8 and 16 bits the compositor rounds the
+/// whole backdrop after each adjustment layer ([`adjustment_quantum`]), so showing or hiding one
+/// can move pixels outside its mask by a level.
+pub fn change_bounds_in(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>, canvas: Rect, depth: photocraft_color::SampleType) -> Option<Rect> {
     let layer = layers.get(k)?;
     if layer.clipped && matches!(layer.content, LayerContent::Adjustment(_)) {
         let base = layers.get(..k)?.iter().rev().find(|l| !l.clipped)?;
@@ -1626,7 +1628,7 @@ pub fn change_bounds_in(layers: &[Layer], k: usize, outer: Option<(&[Layer], usi
         }
         return change_bounds(base, canvas);
     }
-    change_bounds(layer, canvas).or_else(|| masked_change_bounds(layers, k, outer, canvas))
+    change_bounds(layer, canvas).or_else(|| adjustment_quantum(depth).is_none().then(|| masked_change_bounds(layers, k, outer, canvas)).flatten())
 }
 
 /// #6533: an adjustment layer whose mask hides everything outside its painted area (enabled,
