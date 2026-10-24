@@ -378,19 +378,21 @@ impl GpuCanvas {
     }
 
     /// Replace the whole document image with a `format` texture of premultiplied `texels`.
-    fn upload_full_as(&self, doc: u64, size: [u32; 2], format: wgpu::TextureFormat, texels: &[u8]) {
+    /// Returns whether it wrote the texture (not when the GPU is unhealthy or has no resources).
+    fn upload_full_as(&self, doc: u64, size: [u32; 2], format: wgpu::TextureFormat, texels: &[u8]) -> bool {
         if texels.len() as u64 != size[0] as u64 * size[1] as u64 * texel_bytes(format) {
-            return;
+            return false;
         }
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let mut renderer = self.rs.renderer.write();
-        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
         if !self.reserve_in(res, doc, size, format) {
-            return;
+            return false;
         }
-        let Some(d) = res.docs.get(&doc) else { return };
+        let Some(d) = res.docs.get(&doc) else { return false };
         d.write(queue, [0, 0], size, size[0], texels);
         d.regenerate_mips(device, queue, res, [0, 0, size[0], size[1]]);
+        true
     }
 
     /// Make sure document `doc` has a `size` texture for a preview of a document of `depth`
@@ -452,10 +454,11 @@ impl GpuCanvas {
 
     /// Upload a CPU composite covering the whole document (a preview of a document of `depth`:
     /// see [`GpuCanvas::format_for`]).
-    pub fn upload_buffer_full(&self, doc: u64, buf: &photocraft_compose::Buffer, depth: photocraft_doc::SampleType) {
+    /// Returns whether it wrote the texture.
+    pub fn upload_buffer_full(&self, doc: u64, buf: &photocraft_compose::Buffer, depth: photocraft_doc::SampleType) -> bool {
         let size = [buf.rect.width(), buf.rect.height()];
         let format = self.format_for(depth, size);
-        self.upload_full_as(doc, size, format, &canvas_texels(format, &buf.px));
+        self.upload_full_as(doc, size, format, &canvas_texels(format, &buf.px))
     }
 
     /// Upload the part `rect` (document pixels) of a CPU composite `buf` that covers it, converted
@@ -2732,7 +2735,7 @@ mod tests {
         for format in [FORMAT, FORMAT_HIGH] {
             for part in [photocraft_geom::Rect::new(0, 3, 1, 4), photocraft_geom::Rect::new(10, 20, 700, 790), rect] {
                 let copy = crate::filter_preview_ui::crop(&buf, part);
-                assert_eq!(texels_of_part(format, &buf, part), Some(texels(format, &copy.px)), "{format:?} {part:?}");
+                assert_eq!(texels_of_part(format, &buf, part), Some(canvas_texels(format, &copy.px)), "{format:?} {part:?}");
             }
             assert_eq!(texels_of_part(format, &buf, rect.inflate(1)), None, "not covered");
             assert_eq!(texels_of_part(format, &buf, photocraft_geom::Rect::EMPTY), None);

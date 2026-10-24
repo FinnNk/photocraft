@@ -2399,7 +2399,9 @@ fn upload_filter_preview_view(app: &mut PhotocraftApp, key: u64, visible: photoc
         return;
     }
     let (flat, have) = (p.flat.clone(), p.uploaded);
-    let want = snap_out(visible.inflate(FILTER_PREVIEW_MARGIN), 64).intersect(&result.bounds());
+    // View › Pattern Preview draws copies of the texture around the document, from anywhere in
+    // it: all of it is uploaded, as `ensure_gpu` composites all of it.
+    let want = if app.ui.view.pattern_preview { result.bounds() } else { snap_out(visible.inflate(FILTER_PREVIEW_MARGIN), 64).intersect(&result.bounds()) };
     if have.contains_rect(&want) {
         return;
     }
@@ -2420,10 +2422,11 @@ fn upload_filter_preview_view(app: &mut PhotocraftApp, key: u64, visible: photoc
         };
         if !uploaded {
             // No texture to add to (the device was lost or the size changed): upload it whole.
-            gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &photocraft_compose::flatten(&result)), result.depth);
-            px = result.size.area();
+            // If that fails too (an unhealthy GPU), nothing is recorded, so a later frame tries again.
+            let whole = gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &photocraft_compose::flatten(&result)), result.depth);
+            px = if whole { result.size.area() } else { 0 };
             if let Some(p) = app.filter_preview.as_mut() {
-                p.uploaded = result.bounds();
+                p.uploaded = if whole { result.bounds() } else { photocraft_geom::Rect::EMPTY };
             }
             app.perf.record("filter-preview-view", px, 0.0, crate::gpu_canvas::now_ms() - t0);
             return;

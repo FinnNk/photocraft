@@ -185,3 +185,30 @@ fn the_canvas_shows_the_full_resolution_preview_before_and_after_a_pan() {
         assert!(solarized >= 40, "{centre:?}: the preview covers the canvas outside the dialog ({solarized} of 77)");
     }
 }
+
+/// View › Pattern Preview draws copies of the texture around the document from anywhere in it,
+/// so the whole result goes up, not only the view's part.
+#[test]
+fn pattern_preview_uploads_the_whole_result() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let mut app = previewing(rs, 8);
+    let key = app.filter_preview.as_ref().unwrap().key.doc.0 ^ (1u64 << 61);
+    app.ui.view.pattern_preview = true;
+    upload_filter_preview_view(&mut app, key, DRect::new(300, 200, 900, 600));
+    assert_eq!(app.filter_preview.as_ref().unwrap().uploaded, DRect::new(0, 0, 2048, 1536));
+    assert_preview_pixels(&mut app, DRect::new(1500, 1100, 2048, 1536));
+}
+
+/// When the GPU can't take the upload (it isn't healthy), nothing is recorded as uploaded, so a
+/// later frame uploads again instead of leaving the preview blank.
+#[test]
+fn a_failed_upload_is_not_recorded() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let mut app = previewing(rs, 8);
+    let key = app.filter_preview.as_ref().unwrap().key.doc.0 ^ (1u64 << 61);
+    app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Error("Validation Error".into()));
+    upload_filter_preview_view(&mut app, key, DRect::new(300, 200, 900, 600));
+    assert!(app.filter_preview.as_ref().unwrap().uploaded.is_empty(), "nothing is on the texture");
+}
