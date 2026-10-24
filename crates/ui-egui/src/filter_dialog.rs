@@ -1088,7 +1088,7 @@ pub fn preview_document_with(
     cancel: Option<&photocraft_engine::jobs::JobCtx>,
 ) -> Option<Document> {
     preview_document_for_target(
-        doc,
+        &Arc::new(doc.clone()),
         active,
         command,
         params,
@@ -1106,7 +1106,7 @@ pub fn preview_document_with(
 /// to Profile's `working` is the working space chosen there, not the built-in default.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn preview_document_for_target(
-    doc: &Document,
+    doc: &Arc<Document>,
     active: Option<photocraft_doc::LayerId>,
     command: &str,
     params: &Value,
@@ -1117,7 +1117,7 @@ pub(crate) fn preview_document_for_target(
     color: &ColorSettings,
 ) -> Option<Document> {
     if command == crate::select_mask_view::COMMAND {
-        return crate::select_mask_view::preview_document(doc, active, params, k, cancel);
+        return crate::select_mask_view::preview_document_cached(doc, active, params, k, cancel);
     }
     // Warp Text renders the type again from the layer model (font size, position), which a
     // reduced proxy doesn't scale: it runs at full size and the result is reduced (#218).

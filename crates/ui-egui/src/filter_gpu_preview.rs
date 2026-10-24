@@ -50,6 +50,9 @@ pub struct FilterGpuPreview {
     /// After a failure, the preview key the canvas texture still shows, held on screen until the
     /// CPU preview arrives (rather than the unfiltered document in between).
     held: Option<u64>,
+    /// After a failure zoomed out: the proxy's texture (its last drawn preview) is held on screen
+    /// the same way.
+    held_proxy: bool,
     /// OK applied the filter as a background job: the preview stays until it lands.
     committing: bool,
     /// The document part the dialog's preview window shows (it joins the damage). Set while the
@@ -295,6 +298,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             shown: None,
             failed: false,
             held: None,
+            held_proxy: false,
             committing: false,
             window: std::cell::Cell::new(None),
             proxy: None,
@@ -307,6 +311,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         let ready = app.filter_preview.as_ref().is_some_and(|c| c.key.dialog == p.dialog && c.result.is_some());
         if ready && let Some(p) = app.filter_gpu_preview.as_mut() {
             p.held = None;
+            p.held_proxy = false;
         }
         return app.filter_gpu_preview.as_ref();
     }
@@ -450,10 +455,21 @@ pub fn gpu_proxy(app: &mut PhotocraftApp, idx: usize) -> Option<(u32, u64, [u32;
     Some((k, key, size))
 }
 
+/// After the GPU failed zoomed out, the proxy's texture with its last drawn preview, as
+/// [`gpu_proxy`] gives it: the canvas draws it until the CPU preview is ready (it comes after the
+/// CPU preview in the canvas's chain, so that one is still requested), never the document
+/// unfiltered in between.
+pub fn held_proxy(app: &mut PhotocraftApp, idx: usize) -> Option<(u32, u64, [u32; 2])> {
+    let p = update(app, idx)?;
+    let g = p.proxy.as_ref().filter(|g| p.failed && p.held_proxy && g.drawn.is_some())?;
+    Some((g.k, g.base.id.0, [g.base.size.width, g.base.size.height]))
+}
+
 /// The proxy's texture key, to keep it alive while the session previews zoomed out.
 pub fn gpu_keys(app: &PhotocraftApp) -> Option<u64> {
-    let g = app.filter_gpu_preview.as_ref()?.proxy.as_ref()?;
-    g.shown.as_ref().map(|_| g.base.id.0)
+    let p = app.filter_gpu_preview.as_ref()?;
+    let g = p.proxy.as_ref()?;
+    (g.shown.is_some() || (p.failed && p.held_proxy)).then_some(g.base.id.0)
 }
 
 /// What the Navigator shows of document `idx` while the filter previews on the GPU, and its key:
@@ -462,8 +478,19 @@ pub fn gpu_keys(app: &PhotocraftApp) -> Option<u64> {
 pub fn navigator_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
     let st = app.session.documents().get(idx)?;
     let p = app.filter_gpu_preview.as_ref()?;
+    if p.s.doc != st.doc.id {
+        return None;
+    }
+    if p.failed {
+        // While the canvas holds the GPU's last preview, so does the Navigator; then the CPU's.
+        if p.held.is_none() && !p.held_proxy {
+            return None;
+        }
+        let (h, doc) = p.nav.as_ref()?.shown.as_ref()?;
+        return Some((doc.clone(), h ^ NAVIGATOR_KEY));
+    }
     let showing = p.shown.is_some() || p.proxy.as_ref().is_some_and(|g| g.shown.is_some());
-    if p.s.doc != st.doc.id || p.failed || !showing {
+    if !showing {
         return None;
     }
     let (_, params, _) = dialog(app)?;
@@ -526,6 +553,8 @@ pub fn failed(app: &mut PhotocraftApp, doc: DocId, texture: Option<u64>) {
     if let Some(p) = app.filter_gpu_preview.as_mut().filter(|p| p.s.doc == doc) {
         log::warn!("filter preview falls back to the CPU: the GPU couldn't draw it");
         p.held = texture.filter(|k| p.s.owns(*k));
+        // Zoomed out, the proxy's texture still holds its last drawn preview.
+        p.held_proxy = p.proxy.as_ref().is_some_and(|g| g.shown.is_some() && g.drawn.is_some());
         p.failed = true;
         p.shown = None;
         p.committing = false;

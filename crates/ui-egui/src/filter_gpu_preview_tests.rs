@@ -725,3 +725,127 @@ fn pattern_preview_uploads_the_whole_cpu_filter_preview() {
     let p = h.state().filter_preview.as_ref().unwrap();
     assert!(p.uploaded.contains_rect(&whole), "uploaded {:?} of {:?}", p.uploaded, whole);
 }
+
+/// Select and Mask at 100 % on the GPU canvas: the worker skips the whole composite (each view
+/// change is a new result) and the canvas renders the part it shows, matching the preview.
+#[test]
+fn select_and_mask_at_100_percent_renders_only_what_the_view_shows() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, id) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.state_mut().run("select.rect", json!({"x": 300, "y": 200, "width": 1200, "height": 900, "ellipse": true})).unwrap();
+    let sm = crate::filter_dialog::open(h.state_mut(), crate::select_mask_view::COMMAND).unwrap();
+    {
+        let d = h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == sm).unwrap();
+        d.fields.insert("__preview".into(), json!(true));
+        d.fields.insert("__view".into(), json!("onBlack"));
+    }
+    settle(&mut h, |app| app.filter_preview.as_ref().is_some_and(|p| p.result.is_some() && !p.uploaded.is_empty()));
+    let p = h.state().filter_preview.as_ref().unwrap();
+    assert_eq!(p.key.command, crate::select_mask_view::COMMAND);
+    assert_eq!(p.key.k, 1);
+    assert!(p.flat.is_none(), "no whole composite of the view");
+    let result = p.result.clone().unwrap();
+    assert!(!p.uploaded.contains_rect(&result.bounds()), "only the view's part went up");
+    let shown = probes_named(&mut h, Some("select and mask on black"));
+    let mut checked = 0;
+    for (pt, px) in &shown {
+        let (want, alpha) = expected_in(h.state(), &result, *pt);
+        if alpha < 0.999 {
+            continue;
+        }
+        assert!(within(&want, *px), "at {pt:?} the canvas shows {px:?}, the preview {want:?}");
+        checked += 1;
+    }
+    assert!(checked >= 40, "only {checked} probes");
+    // On Black darkens outside the selection: the probes see the view, not the plain image.
+    let plain = h.state().session.active().unwrap().doc.clone();
+    let differs = shown.iter().filter(|(pt, px)| !within(&expected_around(h.state(), &plain, *pt, 0).0, *px)).count();
+    assert!(differs >= 10, "only {differs} probes differ from the plain image");
+}
+
+/// Hardening: the GPU fails while previewing a targeted mask; no frame shows the mask unfiltered
+/// where the blur changes it, and the CPU preview takes over.
+#[test]
+fn a_failing_mask_preview_falls_back_to_the_cpu_preview() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, id) = harness(rs, 4.0, true);
+    masked_cover(&mut h);
+    h.run_steps(2);
+    if !gpu_path(&h) {
+        return;
+    }
+    settle(&mut h, |app| on_gpu(app, 0));
+    h.state().gpu.as_ref().unwrap().fail_operators(true);
+    set_radius(&mut h, id, 12.0);
+    let mask_oracle = |app: &PhotocraftApp, r: f64| {
+        let st = app.session.active().unwrap();
+        std::sync::Arc::new(crate::filter_dialog::preview_document(&st.doc, st.active_layer, COMMAND, &json!({"radius": r, "target": "mask"}), 1).unwrap())
+    };
+    let (raw_doc, r4_doc, r12_doc) = (oracle(h.state(), None), mask_oracle(h.state(), 4.0), mask_oracle(h.state(), 12.0));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        h.step();
+        for (p, px) in probes(&mut h) {
+            let (raw, alpha) = expected_around(h.state(), &raw_doc, p, 0);
+            let (r4, _) = expected_in(h.state(), &r4_doc, p);
+            let (r12, _) = expected_in(h.state(), &r12_doc, p);
+            let apart = |b: &[(u8, u8); 3]| (0..3).any(|c| b[c].0 > raw[c].1.saturating_add(12) || raw[c].0 > b[c].1.saturating_add(12));
+            if alpha > 0.999 && apart(&r4) && apart(&r12) {
+                assert!(!within(&raw, px), "a frame shows the mask unfiltered at {p:?}: {px:?}");
+            }
+        }
+        if h.state().filter_preview.as_ref().is_some_and(|p| p.result.is_some()) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the CPU preview never took over");
+    }
+    assert!(!on_gpu(h.state_mut(), 0), "the session stays on the CPU");
+}
+
+/// Hardening: the GPU fails zoomed out. Until the CPU's proxy preview is ready the canvas holds
+/// the GPU proxy's last picture (never the document unfiltered), and so does the Navigator; then
+/// the CPU preview shows.
+#[test]
+fn a_failing_zoomed_out_preview_holds_its_last_picture() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, id) = harness_sized(rs, 4.0, true, [3000, 2400]);
+    if !gpu_path(&h) {
+        return;
+    }
+    h.state_mut().ui.views[0].zoom = 0.25;
+    settle(&mut h, |app| app.filter_gpu_preview.as_ref().is_some_and(|p| p.proxy.as_ref().is_some_and(|g| g.drawn.is_some())));
+    let (nav_before, _) = navigator_doc(h.state_mut(), 0).expect("the Navigator's picture");
+    h.state().gpu.as_ref().unwrap().fail_operators(true);
+    set_radius(&mut h, id, 12.0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut held_frames = 0;
+    loop {
+        h.step();
+        let ready = h.state().filter_preview.as_ref().is_some_and(|p| p.result.is_some());
+        if ready {
+            break;
+        }
+        let failed = h.state().filter_gpu_preview.as_ref().is_some_and(|p| p.failed);
+        if failed {
+            // Held: the canvas draws the GPU proxy's texture, the Navigator its last picture.
+            assert!(held_proxy(h.state_mut(), 0).is_some(), "an unfiltered frame between the failure and the CPU preview");
+            let (nav, _) = navigator_doc(h.state_mut(), 0).expect("the Navigator holds its picture");
+            assert!(std::sync::Arc::ptr_eq(&nav, &nav_before));
+            held_frames += 1;
+        }
+        assert!(std::time::Instant::now() < deadline, "the CPU preview never took over");
+    }
+    assert!(h.state().filter_gpu_preview.as_ref().is_some_and(|p| p.failed), "the GPU failed");
+    h.run_steps(3);
+    assert!(!on_gpu(h.state_mut(), 0));
+    assert!(gpu_proxy(h.state_mut(), 0).is_none() && held_proxy(h.state_mut(), 0).is_none(), "the CPU preview shows now");
+    assert!(navigator_doc(h.state_mut(), 0).is_none(), "the Navigator shows the CPU preview");
+    assert!(held_frames >= 1, "no frame came between the failure and the CPU preview: nothing was checked");
+}
