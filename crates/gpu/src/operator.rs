@@ -65,11 +65,12 @@ pub enum SeparableBlur {
 /// Most taps a [`SeparableBlur::Convolve`] may have (Custom's 5×5).
 const MAX_TAPS: usize = 25;
 
-/// Largest disc ([`SeparableBlur::Disc`]) the GPU runs: its pass reads every texel of the disc
-/// for every output pixel (about 450 at this radius; 16 ms a frame at radius 10 on an RTX 4090
-/// Laptop for a 1920×1080 view), so larger ones would block a slower GPU's frames for too long;
-/// those preview on the CPU, off the UI thread.
-pub const MAX_DISC_RADIUS: usize = 12;
+/// Largest disc ([`SeparableBlur::Disc`]) the GPU runs. Its passes read about four texels a
+/// pixel per unit of radius (one step per half-width, [`record_disc`]): at this radius 63 ms a
+/// frame on an RTX 4090 Laptop for a 1920×1080 view (the CPU filter takes 22 s over 36 MP).
+/// Larger ones would block a slower GPU's frames for too long, and preview on the CPU, off the
+/// UI thread.
+pub const MAX_DISC_RADIUS: usize = 100;
 
 impl SeparableBlur {
     /// How far outside an output pixel the blur reads, along each axis.
@@ -344,6 +345,7 @@ const BOX_SEGMENT: u32 = 64;
 /// The compute pipelines of the operators, created on first use.
 pub(crate) struct OpKit {
     blur_layout: wgpu::BindGroupLayout,
+    disc_layout: wgpu::BindGroupLayout,
     finish_layout: wgpu::BindGroupLayout,
     kernel: wgpu::ComputePipeline,
     boxes: wgpu::ComputePipeline,
@@ -387,12 +389,13 @@ impl OpKit {
             ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
             count: None,
         };
-        let weights = wgpu::BindGroupLayoutEntry {
-            binding: 3,
+        let buffer = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
             visibility: wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None },
             count: None,
         };
+        let weights = buffer(3);
         let (kit, error) = crate::first_error(device, || {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("pc_operator"),
@@ -401,6 +404,11 @@ impl OpKit {
             let blur_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("pc_operator_blur"),
                 entries: &[tex(0), storage(1), uniform(2), weights],
+            });
+            // A disc step: the horizontal extreme and the result so far in, both out.
+            let disc_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("pc_operator_disc"),
+                entries: &[tex(0), tex(1), storage(2), storage(3), uniform(4), buffer(5)],
             });
             let finish_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("pc_operator_finish"),
@@ -424,10 +432,10 @@ impl OpKit {
             let kernel = pipeline(&blur_layout, "kernel_pass");
             let boxes = pipeline(&blur_layout, "box_pass");
             let extreme = pipeline(&blur_layout, "extreme_pass");
-            let disc = pipeline(&blur_layout, "disc_pass");
+            let disc = pipeline(&disc_layout, "disc_step");
             let convolve = pipeline(&blur_layout, "convolve_pass");
             let finish = pipeline(&finish_layout, "finish");
-            OpKit { blur_layout, finish_layout, kernel, boxes, extreme, disc, convolve, finish }
+            OpKit { blur_layout, disc_layout, finish_layout, kernel, boxes, extreme, disc, convolve, finish }
         });
         match error {
             None => Some(kit),
@@ -486,13 +494,18 @@ pub(crate) fn record_blur<'s>(
     source: &wgpu::Texture,
     origin: [u32; 2],
     size: [u32; 2],
-    scratch: &'s [wgpu::Texture; 2],
+    scratch: &'s [wgpu::Texture],
 ) -> Option<&'s wgpu::Texture> {
     use wgpu::util::DeviceExt;
+    if let SeparableBlur::Disc { half_widths, max } = blur
+        && !half_widths.is_empty()
+    {
+        return record_disc(device, encoder, kit, half_widths, *max, source, origin, size, scratch);
+    }
     let axes: Vec<(usize, u32)> = match blur {
         SeparableBlur::Kernel(_) | SeparableBlur::Extreme { .. } => vec![(0, 0), (0, 1)],
         SeparableBlur::Boxes(b) => [0u32, 1].iter().flat_map(|&axis| (0..b.len()).map(move |i| (i, axis))).collect(),
-        // One 2D pass.
+        // One 2D pass (a disc has its own, `record_disc`).
         SeparableBlur::Disc { .. } | SeparableBlur::Convolve { .. } => vec![(0, 0)],
     };
     let weights: Vec<u8> = match blur {
@@ -510,7 +523,7 @@ pub(crate) fn record_blur<'s>(
         contents: &weights,
         usage: wgpu::BufferUsages::STORAGE,
     });
-    let ping = scratch;
+    let ping = scratch.get(..2)?;
     let last = axes.len().checked_sub(1)?;
     for (n, &(i, axis)) in axes.iter().enumerate() {
         let src = if n == 0 { source } else { &ping[(n + 1) % 2] };
@@ -524,7 +537,8 @@ pub(crate) fn record_blur<'s>(
                 ((w / 2) as u32, 1.0 / w as f32, &kit.boxes)
             }
             SeparableBlur::Extreme { radius, max } => (*radius, f32::from(u8::from(*max)), &kit.extreme),
-            SeparableBlur::Disc { half_widths, max } => ((half_widths.len() / 2) as u32, f32::from(u8::from(*max)), &kit.disc),
+            // Only the empty disc (radius under 1) comes here: a copy.
+            SeparableBlur::Disc { max, .. } => (0, f32::from(u8::from(*max)), &kit.extreme),
             SeparableBlur::Convolve { taps, .. } => (taps.len() as u32, 0.0, &kit.convolve),
         };
         let (ox, oy) = if n == 0 { (origin[0], origin[1]) } else { (0, 0) };
@@ -559,6 +573,80 @@ pub(crate) fn record_blur<'s>(
         }
     }
     ping.get(last % 2)
+}
+
+/// Scratch textures a description's passes need: a disc four (the horizontal extreme and the
+/// result, each ping-ponged), the rest two.
+pub(crate) fn scratch_count(blur: &SeparableBlur) -> usize {
+    if matches!(blur, SeparableBlur::Disc { half_widths, .. } if !half_widths.is_empty()) { 4 } else { 2 }
+}
+
+/// Minimum or Maximum over a disc in `half_widths.len() / 2 + 1` steps: step `h` holds the
+/// horizontal extreme over `2h + 1` texels (`H_0` is the source, `H_{h+1}[x]` the extreme of
+/// `H_h[x - 1]` and `H_h[x + 1]`, and of `H_0[x]` too for `h = 0`) and folds in the disc's rows
+/// whose half-width is `h`. Every row is read once, so a pixel costs about four reads per unit
+/// of radius rather than a read per texel of the disc.
+#[allow(clippy::too_many_arguments)]
+fn record_disc<'s>(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    kit: &OpKit,
+    half_widths: &[u32],
+    max: bool,
+    source: &wgpu::Texture,
+    origin: [u32; 2],
+    size: [u32; 2],
+    scratch: &'s [wgpu::Texture],
+) -> Option<&'s wgpu::Texture> {
+    use wgpu::util::DeviceExt;
+    let r = (half_widths.len() / 2) as i32;
+    let steps = half_widths.iter().copied().max()? as usize + 1;
+    // The disc's rows by half-width: `rows[start[h]..start[h + 1]]` are the offsets dy of step h.
+    let mut rows = Vec::new();
+    let mut start = Vec::with_capacity(steps + 1);
+    for h in 0..steps {
+        start.push(rows.len() as u32);
+        rows.extend((-r..=r).zip(half_widths).filter(|(_, w)| **w as usize == h).map(|(dy, _)| dy));
+    }
+    start.push(rows.len() as u32);
+    let rows_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("pc_operator_disc_rows"),
+        contents: &rows.iter().flat_map(|v| v.to_le_bytes()).chain(0i32.to_le_bytes()).collect::<Vec<u8>>(),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let (hs, acc) = (scratch.get(..2)?, scratch.get(2..4)?);
+    for h in 0..steps {
+        let h_in = if h == 0 { source } else { &hs[(h + 1) % 2] };
+        let h_out = &hs[h % 2];
+        let (acc_in, acc_out) = (&acc[(h + 1) % 2], &acc[h % 2]);
+        let (o0, o1) = if h == 0 { (origin[0], origin[1]) } else { (0, 0) };
+        // flags: 1 the first step (no result yet, and H_1 takes the centre too), 2 grow H.
+        let flags = u32::from(h == 0) | (u32::from(h + 1 < steps) << 1);
+        let params = words(&[size[0], size[1], o0, o1, start[h], start[h + 1] - start[h], flags, u32::from(max)]);
+        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("pc_operator_disc_step"),
+            contents: &params,
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let views = [h_in, acc_in, h_out, acc_out].map(|t| t.create_view(&Default::default()));
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("pc_operator_disc_step"),
+            layout: &kit.disc_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&views[0]) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views[1]) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&views[2]) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&views[3]) },
+                wgpu::BindGroupEntry { binding: 4, resource: params.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: rows_buf.as_entire_binding() },
+            ],
+        });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("pc_operator_disc_step"), timestamp_writes: None });
+        pass.set_pipeline(&kit.disc);
+        pass.set_bind_group(0, &group, &[]);
+        pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+    }
+    acc.get((steps - 1) % 2)
 }
 
 /// What the finishing pass needs besides its textures.

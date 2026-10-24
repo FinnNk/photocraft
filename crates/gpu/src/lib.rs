@@ -521,9 +521,10 @@ pub struct Compositor {
     op_pins: HashMap<ResKey, Arc<Surface>>,
     /// The operators of the document the current refresh draws.
     frame_ops: Vec<LayerOperator>,
-    /// The blur passes' two scratch textures, reused from cell to cell and step to step (made
-    /// anew each time, they cost their allocation and clearing on every slider step).
-    op_scratch: Option<([u32; 2], [wgpu::Texture; 2])>,
+    /// The operator passes' scratch textures (two, or four for a disc), reused from cell to cell
+    /// and step to step (made anew each time, they cost their allocation and clearing on every
+    /// slider step).
+    op_scratch: Option<([u32; 2], Vec<wgpu::Texture>)>,
     /// The part of the canvas the current refresh draws (tile aligned): operators compute only
     /// their output there.
     frame_region: Rect,
@@ -2115,10 +2116,11 @@ impl Compositor {
                 None => self.create_layer_texture(device, &desc("pc_operator_output", region), ok, bytes(region), stats)?,
             };
             let size = [sub.width(), sub.height()];
-            if self.op_scratch.as_ref().is_none_or(|(s, _)| s[0] < size[0] || s[1] < size[1]) {
+            let count = operator::scratch_count(&blur.blur);
+            if self.op_scratch.as_ref().is_none_or(|(s, t)| s[0] < size[0] || s[1] < size[1] || t.len() < count) {
                 let grown = self.op_scratch.as_ref().map_or(size, |(s, _)| [s[0].max(size[0]), s[1].max(size[1])]);
-                let make = |label| operator::float_texture(device, label, grown[0], grown[1]);
-                self.op_scratch = Some((grown, [make("pc_operator_a"), make("pc_operator_b")]));
+                let made = (0..count).map(|i| operator::float_texture(device, &format!("pc_operator_scratch{i}"), grown[0], grown[1])).collect();
+                self.op_scratch = Some((grown, made));
             }
             let Some(source) = self.residents.get(&wk).map(|r| r.texture.clone()) else {
                 // Evicted making room for the output: the refresh goes to the CPU.

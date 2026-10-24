@@ -993,7 +993,8 @@ fn minimum_maximum_and_custom_preview_on_the_gpu() {
         (MINIMUM, json!({"radius": 5.0, "preserve": "squareness"}), true),
         (MAXIMUM, json!({"radius": 9.0, "preserve": "roundness"}), true),
         (CUSTOM, json!({"kernel": blur_more, "scale": 14, "offset": 0}), true),
-        (MAXIMUM, json!({"radius": 60.0, "preserve": "roundness"}), false),
+        (MAXIMUM, json!({"radius": 40.0, "preserve": "roundness"}), true),
+        (MAXIMUM, json!({"radius": 150.0, "preserve": "roundness"}), false),
     ];
     for (command, params, gpu) in cases {
         crate::dialogs::cancel(h.state_mut(), open).unwrap();

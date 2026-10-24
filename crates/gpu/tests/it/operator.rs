@@ -542,6 +542,9 @@ fn minimum_maximum_and_custom_operators_match_the_cpu_filters() {
         FilterParams::Minimum { radius: 3.0, preserve: Preserve::Roundness },
         FilterParams::Maximum { radius: 7.5, preserve: Preserve::Roundness },
         FilterParams::Maximum { radius: 0.4, preserve: Preserve::Roundness },
+        // Discs whose steps run many half-widths, wider than the layer's margin.
+        FilterParams::Minimum { radius: 25.0, preserve: Preserve::Roundness },
+        FilterParams::Maximum { radius: 60.0, preserve: Preserve::Roundness },
         FilterParams::Custom { kernel: blur_more, scale: 14.0, offset: 0.0 },
         FilterParams::Custom { kernel: edges, scale: 2.0, offset: 30.0 },
         FilterParams::Custom { kernel: corner, scale: 0.0, offset: -10.0 },
