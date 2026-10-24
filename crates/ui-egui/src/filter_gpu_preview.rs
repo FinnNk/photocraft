@@ -514,7 +514,13 @@ fn apply_for(app: &mut PhotocraftApp, idx: usize, command: &str, params: &Value,
                     }
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
                 },
-                // Another source or mask (or none yet): make this one.
+                // A build for another source or mask still running: one at a time (each holds the
+                // canvas's planes, about a gigabyte at 36 MP), so this one waits for it to finish.
+                Some((pk, rx)) if matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                    p.apply_pending = Some((pk, rx));
+                    return None;
+                }
+                // None yet, or the other one is done: make this one.
                 _ => {
                     let (doc, target) = match &p.proxy {
                         Some(g) if k > 1 => (Arc::clone(&g.base), g.target),
@@ -754,13 +760,17 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         let map = displace_map(app, command, &params, 1);
         let depth = lens_depth(app, idx, command, &params, 1);
         let apply = apply_for(app, idx, command, &params, 1);
+        // Apply Image's inputs still being made: the CPU preview meanwhile, not a refusal.
+        let waiting = command == APPLY_IMAGE && apply.is_none();
         let p = app.filter_gpu_preview.as_ref()?;
         let st = app.session.documents().get(idx)?;
         let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone(), p.measured, Inputs { map, depth, apply }) else {
             // Settings the GPU can't run (a reach past its limit, Displace without a map): the
             // CPU preview for them, without building again every frame.
             hide(app);
-            app.filter_gpu_refused = Some((session, h));
+            if !waiting {
+                app.filter_gpu_refused = Some((session, h));
+            }
             return None;
         };
         app.filter_gpu_refused = None;
@@ -845,11 +855,14 @@ fn update_proxy<'a>(app: &'a mut PhotocraftApp, idx: usize, k: u32, params: &Val
         let map = displace_map(app, command, &scaled, k);
         let depth = lens_depth(app, idx, command, &scaled, k);
         let apply = apply_for(app, idx, command, &scaled, k);
+        let waiting = command == APPLY_IMAGE && apply.is_none();
         let g = app.filter_gpu_preview.as_ref()?.proxy.as_ref()?;
         let Some((blur, region)) = blur_for(&g.base, g.target, &scaled, g.selection.clone(), g.measured, Inputs { map, depth, apply }) else {
             // A reach past the GPU's limit: the CPU preview for these settings.
             hide_proxy(app);
-            app.filter_gpu_refused = Some(refused);
+            if !waiting {
+                app.filter_gpu_refused = Some(refused);
+            }
             return None;
         };
         app.filter_gpu_refused = None;

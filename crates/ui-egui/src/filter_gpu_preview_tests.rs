@@ -1516,6 +1516,15 @@ fn apply_image_previews_on_the_gpu() {
             d.fields.insert(k.clone(), v.clone());
         }
     };
+    // One input build at a time: a source change while a build runs waits for it (each holds the
+    // canvas's planes), rather than starting a second one beside it.
+    on_gpu(h.state_mut(), 0);
+    let pending = |h: &Harness<'static, PhotocraftApp>| h.state().filter_gpu_preview.as_ref().and_then(|p| p.apply_pending.as_ref().map(|(k, _)| k.clone()));
+    let first = pending(&h).expect("the first build runs off the UI thread");
+    set(&mut h, &json!({"sourceInvert": true}));
+    on_gpu(h.state_mut(), 0);
+    assert_eq!(pending(&h), Some(first), "the second waits for the first");
+    set(&mut h, &json!({"sourceInvert": false}));
     let cases = [
         json!({"blending": "difference", "opacity": 70.0}),
         json!({"blending": "screen", "sourceInvert": true}),
