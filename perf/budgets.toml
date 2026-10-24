@@ -727,6 +727,7 @@ title = "Twirl 120° dialog slider step, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
 row = "Twirl 120° dialog preview (GPU resident)"
+budget_ms = 16
 
 [[scenario]]
 id = "P83"
@@ -734,3 +735,4 @@ title = "Wave (5 generators) dialog slider step, GPU resident, 36 MP, 1920x1080 
 issue = 5772
 bench = "interactive_bench"
 row = "Wave (5 generators) dialog preview (GPU resident)"
+budget_ms = 16
