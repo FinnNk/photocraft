@@ -708,3 +708,17 @@ title = "Displace 10 % dialog slider step (map stretched, Wrap Around), GPU resi
 issue = 5772
 bench = "interactive_bench"
 row = "Displace dialog preview 10 % (GPU resident)"
+
+[[scenario]]
+id = "P82"
+title = "Twirl 120° dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Twirl 120° dialog preview (GPU resident)"
+
+[[scenario]]
+id = "P83"
+title = "Wave (5 generators) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Wave (5 generators) dialog preview (GPU resident)"

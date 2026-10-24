@@ -57,7 +57,7 @@ use photocraft_raster::{Surface, Tile};
 
 pub use health::{DeviceHealth, Fault};
 pub use operator::{
-    Combine, DisplaceParams, GaussianBlur, LayerOperator, MAX_DISC_RADIUS, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur, Undefined,
+    Combine, GaussianBlur, LayerOperator, MAX_DISC_RADIUS, Mapping, OperatorInput, OperatorProgram, OperatorTarget, RemapParams, SeparableBlur, Undefined,
 };
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
@@ -2118,24 +2118,32 @@ impl Compositor {
         }
         // Displace's map, once per map (shared by every cell).
         let map_key = (op.layer, Role::OperatorMap, WHOLE);
-        if let SeparableBlur::Displace(d) = &blur.blur {
+        // (Another remap binds a 1×1 stand-in.)
+        let map_input = match &blur.blur {
+            SeparableBlur::Remap(r) => match &r.mapping {
+                operator::Mapping::Displace { map, map_size, .. } => Some((Arc::clone(map), *map_size)),
+                _ => Some((Arc::new(vec![[0.0; 4]]), [1, 1])),
+            },
+            _ => None,
+        };
+        if let Some((map, map_size)) = &map_input {
             let print = {
                 let mut h = std::collections::hash_map::DefaultHasher::new();
-                std::hash::Hash::hash(&(Arc::as_ptr(&d.map) as usize, d.map_size), &mut h);
+                std::hash::Hash::hash(&(Arc::as_ptr(map) as usize, *map_size), &mut h);
                 std::hash::Hasher::finish(&h)
             };
-            let r = Rect::from_xywh(0, 0, d.map_size[0], d.map_size[1]);
+            let r = Rect::from_xywh(0, 0, map_size[0], map_size[1]);
             if fresh(self, &map_key, r, print) {
                 touch(self, &map_key);
             } else {
                 let texture = self.create_layer_texture(device, &desc("pc_operator_map", r), map_key, bytes(r), stats)?;
-                operator::write_texels(queue, &texture, r.width(), r.height(), &d.map);
+                operator::write_texels(queue, &texture, r.width(), r.height(), map);
                 self.staged += bytes(r);
                 stats.bytes_uploaded += bytes(r) as usize;
                 let resident = self.operator_resident(texture, r, surface, doc);
                 self.residents.insert(map_key, resident);
                 self.op_made.insert(map_key, print);
-                self.op_maps.insert(map_key, Arc::clone(&d.map));
+                self.op_maps.insert(map_key, Arc::clone(map));
                 changed = true;
             }
         }
@@ -2174,9 +2182,9 @@ impl Compositor {
             let (Some(Some(kit)), Some((_, scratch))) = (self.op_kit.as_ref(), self.op_scratch.as_ref()) else { return None };
             let origin = [(sub.x0 - window.x0) as u32, (sub.y0 - window.y0) as u32];
             let blurred = match &blur.blur {
-                SeparableBlur::Displace(d) => {
+                SeparableBlur::Remap(d) => {
                     let map = self.residents.get(&map_key).map(|r| r.texture.clone())?;
-                    operator::record_displace(device, encoder, kit, d, &source, window, &map, region, surface.format().alpha, scratch)?
+                    operator::record_remap(device, encoder, kit, d, &source, window, &map, region, surface.format().alpha, scratch)?
                 }
                 other => operator::record_blur(device, encoder, kit, other, &source, origin, size, scratch)?,
             };
