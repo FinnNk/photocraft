@@ -274,7 +274,7 @@ fn main() {
                 Some(d) => d.texture_buffer(&flat),
                 None => std::borrow::Cow::Borrowed(&flat),
             };
-            std::hint::black_box(photocraft_ui_egui::gpu_canvas::texels(wgpu::TextureFormat::Rgba8Unorm, &texture.px));
+            std::hint::black_box(photocraft_ui_egui::gpu_canvas::texels(wgpu::TextureFormat::Rgba8Unorm, &texture.px).expect("the canvas format"));
             ms(t)
         });
         // The window's texture holds its view plus half again on each side: 800×300 pixels for a
