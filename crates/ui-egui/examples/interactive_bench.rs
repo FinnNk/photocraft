@@ -281,9 +281,11 @@ fn main() {
         // 400×150 point window at 100 %, cropped from the worker's composite.
         b.time("filter preview window texture, k 1", |_| {
             let t = Instant::now();
-            let crop = Rect::from_xywh(w as i32 / 2 - 400, h as i32 / 2 - 150, 800, 300);
+            // Clipped to the composite: a `--size` under 800×300 puts the window partly outside it.
+            let crop = Rect::from_xywh(w as i32 / 2 - 400, h as i32 / 2 - 150, 800, 300).intersect(&flat.rect);
             let stride = flat.rect.width() as usize;
-            let px = (crop.y0..crop.y1).flat_map(|y| flat.px[y as usize * stride + crop.x0 as usize..][..crop.width() as usize].iter().copied()).collect();
+            let (x0, cw) = ((crop.x0 - flat.rect.x0) as usize, crop.width() as usize);
+            let px = (crop.y0..crop.y1).flat_map(|y| flat.px[(y - flat.rect.y0) as usize * stride + x0..][..cw].iter().copied()).collect();
             let cropped = photocraft_compose::Buffer { rect: crop, px };
             std::hint::black_box(photocraft_ui_egui::canvas::display_image(display.as_deref(), &cropped));
             ms(t)
