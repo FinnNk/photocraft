@@ -641,3 +641,19 @@ fn window_filters_the_gpu_cant_run_are_refused() {
         assert!(GaussianBlur::new(convolve(scale, offset), area, area, None, false, SampleType::U8).is_none(), "{scale} {offset}");
     }
 }
+
+/// Closing the last document with operators frees their scratch textures (they were kept for the
+/// rest of the session).
+#[test]
+fn scratch_textures_go_with_the_last_operator_document() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (doc, id) = blur_doc(SampleType::U8);
+    g.comp.set_operators(doc.id, vec![operator(&doc, id, 6.0, false)]);
+    photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+    assert!(g.comp.operator_scratch_bytes() > 0, "the passes made their scratch");
+    g.comp.forget_doc(doc.id);
+    assert_eq!(g.comp.operator_scratch_bytes(), 0, "the last operator document closed");
+}
