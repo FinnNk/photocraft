@@ -87,6 +87,9 @@ struct Bench {
     /// `--json` (`cargo xtask perf`).
     extra: Vec<(Vec<f64>, Option<u64>)>,
     rss: photocraft_testkit::perf::RssSampler,
+    /// Rows this machine can't time, by a part of their names, and why: `cargo xtask perf`
+    /// reports them as not run rather than missing.
+    skipped: Vec<Value>,
 }
 
 impl Bench {
@@ -179,6 +182,7 @@ fn main() {
         rows: Vec::new(),
         extra: Vec::new(),
         rss: photocraft_testkit::perf::RssSampler::start(std::time::Duration::from_millis(2)),
+        skipped: Vec::new(),
     };
     println!("document {w}×{h} ({:.1} MP), 8-bit RGB, {} reps, {}", (w * h) as f64 / 1e6, reps, if b.gpu.is_some() { "GPU canvas" } else { "CPU canvas" });
 
@@ -268,11 +272,15 @@ fn main() {
             .expect("preview");
         let flat = photocraft_compose::flatten(&p);
         let display = s.color.canvas_display_for(&p, None).ok();
+        // Clipped to the composite: a `--size` smaller than the view or the window puts them partly
+        // outside it.
         let crop = |r: Rect| {
+            let r = r.intersect(&flat.rect);
             let stride = flat.rect.width() as usize;
-            let mut px = Vec::with_capacity(r.width() as usize * r.height() as usize);
+            let (x0, cw) = ((r.x0 - flat.rect.x0) as usize, r.width() as usize);
+            let mut px = Vec::with_capacity(cw * r.height() as usize);
             for y in r.y0..r.y1 {
-                px.extend_from_slice(&flat.px[y as usize * stride + r.x0 as usize..][..r.width() as usize]);
+                px.extend_from_slice(&flat.px[(y - flat.rect.y0) as usize * stride + x0..][..cw]);
             }
             photocraft_compose::Buffer { rect: r, px }
         };
@@ -281,13 +289,13 @@ fn main() {
                 Some(d) => d.texture_buffer(buf),
                 None => std::borrow::Cow::Borrowed(buf),
             };
-            std::hint::black_box(photocraft_ui_egui::gpu_canvas::texels(wgpu::TextureFormat::Rgba8Unorm, &texture.px));
+            std::hint::black_box(photocraft_ui_egui::gpu_canvas::texels(wgpu::TextureFormat::Rgba8Unorm, &texture.px).expect("the canvas format"));
         };
         // Converted straight from the composite, as the canvas does (a linear one is copied out and
         // sRGB-encoded first).
         b.time("filter preview canvas upload, k 1 (view, display + texels)", |_| {
             let t = Instant::now();
-            let view = Rect::from_xywh(w as i32 / 2 - 960 - 256, h as i32 / 2 - 540 - 256, 1920 + 512, 1080 + 512);
+            let view = Rect::from_xywh(w as i32 / 2 - 960 - 256, h as i32 / 2 - 540 - 256, 1920 + 512, 1080 + 512).intersect(&flat.rect);
             if display.as_deref().is_some_and(|d| d.encode_srgb) {
                 texels(&crop(view));
             } else {
@@ -314,7 +322,11 @@ fn main() {
     // pages and the compositor draws a 1920×1080 view of it. Per slider change, waited on.
     // Only where the adapter runs layer operators: else the render falls back to a CPU composite
     // without the blur, and the rows would time that.
-    if b.gpu.as_mut().is_some_and(|g| g.comp.operators_supported(&g.device)) {
+    let operators = b.gpu.as_mut().is_some_and(|g| g.comp.operators_supported(&g.device));
+    if !operators {
+        b.skipped.push(json!({"rows": "(GPU resident", "why": "no GPU layer operators on this machine"}));
+    }
+    if operators {
         let st = s.active().expect("doc");
         let (doc, target) = (st.doc.clone(), st.active_layer.expect("layer"));
         let view = Rect::from_xywh(w as i32 / 2 - 960, h as i32 / 2 - 540, 1920, 1080);
@@ -523,6 +535,9 @@ fn main() {
         // Zoomed out (Phase 2): the same blur on the CPU preview's proxy, its radius scaled by k
         // as the CPU preview scales it, composited whole (it is small) per slider step.
         let k = photocraft_ui_egui::proxy::factor(&doc);
+        if k == 1 {
+            b.skipped.push(json!({"rows": "zoomed out", "why": "a document this small previews at 100 %"}));
+        }
         if k > 1 {
             let proxy = photocraft_ui_egui::adjust_preview::proxy_base(&doc, k);
             let ptarget = photocraft_ui_egui::adjust_preview::proxy_layer(target);
@@ -777,7 +792,10 @@ fn main() {
                 r
             })
             .collect();
-        std::fs::write(&out, serde_json::to_string_pretty(&json!({"width": w, "height": h, "gpu": b.gpu.is_some(), "rows": rows})).unwrap())
-            .expect("write json");
+        std::fs::write(
+            &out,
+            serde_json::to_string_pretty(&json!({"width": w, "height": h, "gpu": b.gpu.is_some(), "rows": rows, "context": {"skipped": b.skipped}})).unwrap(),
+        )
+        .expect("write json");
     }
 }

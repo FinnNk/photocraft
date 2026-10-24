@@ -1117,6 +1117,32 @@ fn displace_with_an_open_map_document_previews_on_the_gpu() {
     }
     // The map is made once for the session, not per settings change.
     assert_eq!(h.state().filter_gpu_preview.as_ref().map(|p| p.maps.len()), Some(1));
+    // The Navigator shows the displacement too: its run gets the open documents, so the map
+    // document resolves (it showed the unfiltered document).
+    let (nav, _) = navigator_doc(h.state_mut(), 0).expect("the Navigator's picture");
+    let k = nav.size.width.max(1);
+    let k = h.state().session.active().unwrap().doc.size.width.div_ceil(k);
+    let plain = crate::proxy::proxy_document(&h.state().session.active().unwrap().doc, k);
+    let last = json!({"horizontal": -30.0, "vertical": 20.0, "fit": "tile", "undefinedAreas": "repeat", "mapDocument": map});
+    let want = {
+        let st = h.state().session.active().unwrap();
+        let docs: Vec<_> = h.state().session.documents().iter().map(|d| d.doc.clone()).collect();
+        crate::filter_dialog::preview_document_for_target(
+            &st.doc,
+            st.active_layer,
+            DISPLACE,
+            &last,
+            k,
+            None,
+            photocraft_engine::channel_cmds::ChannelTarget::Composite,
+            &docs,
+            &Default::default(),
+        )
+        .unwrap()
+    };
+    let (shown, plain, want) = (photocraft_compose::flatten(&nav), photocraft_compose::flatten(&plain), photocraft_compose::flatten(&want));
+    assert_eq!(shown.px, want.px, "the Navigator: the CPU preview at its factor");
+    assert_ne!(shown.px, plain.px, "displaced, not the plain document");
     // Zoomed out: the proxy, with its own reduced map.
     h.state_mut().ui.views[0].zoom = 0.25;
     settle(&mut h, |app| app.filter_gpu_preview.as_ref().is_some_and(|p| p.proxy.as_ref().is_some_and(|g| g.drawn.is_some())));
@@ -1153,6 +1179,38 @@ fn displace_with_an_open_map_document_previews_on_the_gpu() {
     set(&mut h, &json!({"mapDocument": -1}));
     h.run_steps(4);
     assert!(!on_gpu(h.state_mut(), 0), "no map, no GPU preview");
+    // Remembered, so the session isn't measured and built again every frame…
+    let refused = h.state().filter_gpu_refused;
+    assert!(refused.is_some(), "the refused settings are kept");
+    h.run_steps(2);
+    assert_eq!(h.state().filter_gpu_refused, refused);
+    // …and new settings try again.
+    set(&mut h, &json!({"mapDocument": map}));
+    settle(&mut h, |app| on_gpu(app, 0));
+    assert!(h.state().filter_gpu_refused.is_none());
+}
+
+/// Only the main canvas gives the dialog's preview window its GPU view: an Arrange tile or a
+/// floating window (perhaps on another display) must not replace it.
+#[test]
+fn only_the_main_canvas_gives_the_preview_window_its_view() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.set_wgpu(rs);
+    app.run("file.new", json!({"width": 640, "height": 480})).unwrap();
+    let doc = app.session.active().unwrap().doc.id;
+    let ctx = egui::Context::default();
+    let view = app.ui.views[0].clone();
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    for primary in [false, true] {
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            crate::canvas::canvas_view(&mut app, ui, 0, rect, view.clone(), primary);
+        });
+        output.textures_delta.clear();
+        assert!(app.perf.gpu, "drawn on the GPU canvas");
+        assert_eq!(app.canvas_gpu.contains_key(&doc), primary, "primary {primary}");
+    }
 }
 
 /// Phase 4: the distort filters preview on the GPU at 100 %, matching the CPU preview (a few of

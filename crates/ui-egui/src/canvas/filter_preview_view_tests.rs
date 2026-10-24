@@ -85,14 +85,23 @@ fn a_full_resolution_preview_uploads_the_view_then_what_a_pan_uncovers() {
         upload_filter_preview_view(&mut app, key, a);
         assert_eq!(app.perf.last_refresh_px, 0, "{depth}-bit: an unchanged view uploads nothing");
 
-        // A pan to the far corner uploads only what the texture didn't have.
-        let b = DRect::new(1500, 1100, 2048, 1536);
-        upload_filter_preview_view(&mut app, key, b);
+        // A jump to the far corner, away from what is there, uploads that view alone, not the
+        // gap between them.
+        let c = DRect::new(1700, 1300, 2048, 1536);
+        upload_filter_preview_view(&mut app, key, c);
         let second = app.filter_preview.as_ref().unwrap().uploaded;
-        assert!(second.contains_rect(&first) && second.contains_rect(&b));
-        assert_eq!(app.perf.last_refresh_px, area(second) - area(first), "{depth}-bit: only the uncovered strips");
-        assert_preview_pixels(&mut app, a);
+        assert!(second.contains_rect(&c) && second.intersect(&first).is_empty(), "{depth}-bit: {second:?}");
+        assert_eq!(app.perf.last_refresh_px, area(second), "{depth}-bit: the new view only");
+        assert_preview_pixels(&mut app, c);
+
+        // A pan from there that overlaps uploads only what the texture didn't have.
+        let b = DRect::new(1300, 900, 1900, 1300);
+        upload_filter_preview_view(&mut app, key, b);
+        let third = app.filter_preview.as_ref().unwrap().uploaded;
+        assert!(third.contains_rect(&second) && third.contains_rect(&b));
+        assert_eq!(app.perf.last_refresh_px, area(third) - area(second), "{depth}-bit: only the uncovered strips");
         assert_preview_pixels(&mut app, b);
+        assert_preview_pixels(&mut app, c);
 
         // A new result starts again from what the view shows.
         app.filter_preview = None;
@@ -184,4 +193,31 @@ fn the_canvas_shows_the_full_resolution_preview_before_and_after_a_pan() {
         assert_eq!(unfiltered, 0, "{centre:?}: no unfiltered pixels on the canvas");
         assert!(solarized >= 40, "{centre:?}: the preview covers the canvas outside the dialog ({solarized} of 77)");
     }
+}
+
+/// View › Pattern Preview draws copies of the texture around the document from anywhere in it,
+/// so the whole result goes up, not only the view's part.
+#[test]
+fn pattern_preview_uploads_the_whole_result() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let mut app = previewing(rs, 8);
+    let key = app.filter_preview.as_ref().unwrap().key.doc.0 ^ (1u64 << 61);
+    app.ui.view.pattern_preview = true;
+    upload_filter_preview_view(&mut app, key, DRect::new(300, 200, 900, 600));
+    assert_eq!(app.filter_preview.as_ref().unwrap().uploaded, DRect::new(0, 0, 2048, 1536));
+    assert_preview_pixels(&mut app, DRect::new(1500, 1100, 2048, 1536));
+}
+
+/// When the GPU can't take the upload (it isn't healthy), nothing is recorded as uploaded, so a
+/// later frame uploads again instead of leaving the preview blank.
+#[test]
+fn a_failed_upload_is_not_recorded() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let mut app = previewing(rs, 8);
+    let key = app.filter_preview.as_ref().unwrap().key.doc.0 ^ (1u64 << 61);
+    app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Error("Validation Error".into()));
+    upload_filter_preview_view(&mut app, key, DRect::new(300, 200, 900, 600));
+    assert!(app.filter_preview.as_ref().unwrap().uploaded.is_empty(), "nothing is on the texture");
 }
