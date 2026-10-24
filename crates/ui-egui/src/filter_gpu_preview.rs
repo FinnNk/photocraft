@@ -42,6 +42,9 @@ pub struct FilterGpuPreview {
     shown: Option<(u64, LayerOperator)>,
     /// The GPU couldn't draw it: the dialog previews on the CPU from now on.
     failed: bool,
+    /// Failed only because the GPU canvas couldn't draw the document (a smaller canvas budget, a
+    /// compositor lost or without operators): back on the GPU once it can again (Retry GPU).
+    unfit: bool,
     /// After a failure, the preview key the canvas texture still shows, held on screen until the
     /// CPU preview arrives (rather than the unfiltered document in between).
     held: Option<u64>,
@@ -227,6 +230,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             measured,
             shown: None,
             failed: false,
+            unfit: false,
             held: None,
             committing: false,
             window: std::cell::Cell::new(None),
@@ -236,9 +240,19 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
     // compositor that failed or was lost): it couldn't show the operator any more, so the CPU
     // preview takes over, as after a failed refresh.
     let drawable = app.session.documents().get(idx).is_some_and(|st| app.gpu.as_ref().is_some_and(|g| g.fits_canvas(&st.doc) && g.operators_supported()));
-    if !drawable && let Some(p) = app.filter_gpu_preview.as_mut().filter(|p| !p.failed && !p.committing) {
+    // Its operator is cleared, as after a failed refresh, so no canvas draws it again unasked; the
+    // GPU canvas shows nothing of this document meanwhile, so there is no texture to hold.
+    let (fell, back) = app.filter_gpu_preview.as_ref().filter(|p| !p.committing).map_or((false, false), |p| (!drawable && !p.failed, drawable && p.unfit));
+    if fell && let Some(p) = app.filter_gpu_preview.as_mut() {
         log::debug!("filter preview on the CPU: the GPU canvas can't draw it any more");
         p.failed = true;
+        p.unfit = true;
+        p.held = None;
+        hide(app);
+    } else if back && let Some(p) = app.filter_gpu_preview.as_mut() {
+        log::debug!("filter preview back on the GPU: the GPU canvas can draw it again");
+        p.failed = false;
+        p.unfit = false;
     }
     let p = app.filter_gpu_preview.as_ref()?;
     if p.failed {
@@ -281,7 +295,9 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
 /// Register the session's shown operator again: after Retry GPU, the new canvas has none (they
 /// lived in the old one's resources), and with unchanged settings `update` wouldn't set them.
 pub(crate) fn rebind(app: &mut PhotocraftApp) {
-    let Some(p) = app.filter_gpu_preview.as_ref() else { return };
+    // A failed session's operators are gone and stay so: one that failed only because the canvas
+    // couldn't draw it builds them again in `update` once the new canvas can.
+    let Some(p) = app.filter_gpu_preview.as_ref().filter(|p| !p.failed) else { return };
     if let (Some(gpu), Some((_, op))) = (app.gpu.as_ref(), p.shown.as_ref()) {
         gpu.set_operators(p.s.doc, vec![op.clone()]);
     }
@@ -330,6 +346,7 @@ pub fn failed(app: &mut PhotocraftApp, doc: DocId, texture: Option<u64>) {
         log::warn!("filter preview falls back to the CPU: the GPU couldn't draw it");
         p.held = texture.filter(|k| p.s.owns(*k));
         p.failed = true;
+        p.unfit = false;
         p.shown = None;
         p.committing = false;
     }

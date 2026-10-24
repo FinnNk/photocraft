@@ -391,7 +391,9 @@ fn another_active_document_leaves_the_committing_session() {
 }
 
 /// The canvas budget shrinking mid-session (the canvas then draws on the CPU, which can't show the
-/// operator): the session fails over to the CPU preview instead of hiding it.
+/// operator): the session fails over to the CPU preview instead of hiding it, with its operator
+/// cleared (nothing stale for the canvas to draw once it fits again), and is back on the GPU when
+/// the budget grows.
 #[test]
 fn a_canvas_that_stops_fitting_mid_session_falls_back_to_the_cpu() {
     let _guard = photocraft_testkit::gpu_lock();
@@ -401,7 +403,12 @@ fn a_canvas_that_stops_fitting_mid_session_falls_back_to_the_cpu() {
         return;
     }
     settle(&mut h, |app| on_gpu(app, 0));
+    let doc = h.state().session.active().unwrap().doc.id;
     h.state().gpu.as_ref().unwrap().set_canvas_budget(1);
     assert!(!on_gpu(h.state_mut(), 0), "the CPU preview takes over");
     assert!(h.state().filter_gpu_preview.as_ref().is_some_and(|p| p.failed));
+    assert!(!h.state().gpu.as_ref().unwrap().has_operators(doc), "its operator is cleared");
+    h.state().gpu.as_ref().unwrap().set_canvas_budget(u64::MAX);
+    assert!(on_gpu(h.state_mut(), 0), "back on the GPU once the canvas fits");
+    assert!(h.state().gpu.as_ref().unwrap().has_operators(doc));
 }
