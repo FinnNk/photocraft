@@ -2426,7 +2426,20 @@ fn upload_filter_preview_view(app: &mut PhotocraftApp, key: u64, visible: photoc
     let Some(gpu) = app.gpu.clone() else { return };
     let Some(p) = app.filter_preview.as_ref() else { return };
     let Some(result) = p.result.clone() else { return };
-    if key != p.key.doc.0 ^ (1u64 << 61) || p.key.k != 1 {
+    if key != p.key.doc.0 ^ (1u64 << 61) {
+        return;
+    }
+    // A reduced preview goes up whole when it's published, and again when nothing is recorded:
+    // after Retry GPU built a new canvas (`gpu_status::retry_now` clears the record).
+    if p.key.k != 1 {
+        if p.uploaded.is_empty() {
+            let buffer = p.flat.clone().unwrap_or_else(|| std::sync::Arc::new(photocraft_compose::flatten(&result)));
+            let (display, _) = canvas_display(app, &result, None);
+            let whole = gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buffer), result.depth);
+            if let Some(p) = app.filter_preview.as_mut().filter(|_| whole) {
+                p.uploaded = result.bounds();
+            }
+        }
         return;
     }
     let (flat, have) = (p.flat.clone(), p.uploaded);
@@ -3727,6 +3740,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             on_gpu = true;
             app.navigator_gpu.remove(&doc.id);
             let original_size = [doc.size.width.div_ceil(k), doc.size.height.div_ceil(k)];
+            if k > 1 && key == doc.id.0 ^ (1u64 << 61) {
+                upload_filter_preview_view(app, key, photocraft_geom::Rect::EMPTY);
+            }
             if k == 1 && key == doc.id.0 ^ (1u64 << 61) {
                 // A size-changing preview grows around the old image centre, as drawn below (a
                 // pixel more each way covers its half-pixel shift).
