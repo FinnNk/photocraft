@@ -35,7 +35,8 @@ fn the_operator_shader_builds_with_fxc() {
         eprintln!("skipping: no DX12 adapter");
         return;
     };
-    let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) else { return };
-    let Ok(mut comp) = photocraft_gpu::Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba32Float) else { return };
-    assert!(comp.operators_supported(&device), "the operator pipelines build with FXC");
+    // With an adapter, a device that can't be made is a failure, not a skip. The operator
+    // pipelines are built on their own: the compositor's own FXC failure is #8733 (#8734).
+    let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a DX12 device");
+    assert!(photocraft_gpu::Compositor::operator_pipelines_build(&device), "the operator pipelines build with FXC");
 }
