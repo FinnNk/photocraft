@@ -731,6 +731,14 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             apply_failed: None,
         });
     }
+    // The GPU canvas can stop drawing this document mid-session (a smaller canvas budget, a
+    // compositor that failed or was lost): it couldn't show the operator any more, so the CPU
+    // preview takes over, as after a failed refresh.
+    let drawable = app.session.documents().get(idx).is_some_and(|st| app.gpu.as_ref().is_some_and(|g| g.fits_canvas(&st.doc) && g.operators_supported()));
+    if !drawable && let Some(p) = app.filter_gpu_preview.as_mut().filter(|p| !p.failed && !p.committing) {
+        log::debug!("filter preview on the CPU: the GPU canvas can't draw it any more");
+        p.failed = true;
+    }
     let p = app.filter_gpu_preview.as_ref()?;
     if p.failed {
         // Hold the last GPU preview until the CPU's is ready.
@@ -771,8 +779,9 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         let map = displace_map(app, command, &params, 1);
         let depth = lens_depth(app, idx, command, &params, 1);
         let apply = apply_for(app, idx, command, &params, 1);
-        // Apply Image's inputs still being made: the CPU preview meanwhile, not a refusal.
-        let waiting = command == APPLY_IMAGE && apply.is_none();
+        // Apply Image's inputs still being made (a build pending): the CPU preview meanwhile, not a
+        // refusal. A build that failed has none pending, and is one.
+        let waiting = command == APPLY_IMAGE && apply.is_none() && app.filter_gpu_preview.as_ref().is_some_and(|p| p.apply_pending.is_some());
         let p = app.filter_gpu_preview.as_ref()?;
         let st = app.session.documents().get(idx)?;
         let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone(), p.measured, Inputs { map, depth, apply }) else {
@@ -804,6 +813,23 @@ fn release_cpu_preview(app: &mut PhotocraftApp) {
     let dialog = app.filter_gpu_preview.as_ref().map(|p| p.dialog);
     if app.filter_preview.as_ref().is_some_and(|c| Some(c.key.dialog) == dialog && !c.committing) {
         app.filter_preview = None;
+    }
+}
+
+/// Register the session's shown operators again: after Retry GPU, the new canvas has none (they
+/// lived in the old one's resources), and with unchanged settings `update` wouldn't set them. The
+/// zoomed-out proxy's texture is drawn again too.
+pub(crate) fn rebind(app: &mut PhotocraftApp) {
+    let Some(gpu) = app.gpu.clone() else { return };
+    let Some(p) = app.filter_gpu_preview.as_mut() else { return };
+    if let Some((_, op)) = p.shown.as_ref() {
+        gpu.set_operators(p.s.doc, vec![op.clone()]);
+    }
+    if let Some(g) = p.proxy.as_mut() {
+        if let Some((_, op)) = g.shown.as_ref() {
+            gpu.set_operators(g.base.id, vec![op.clone()]);
+        }
+        g.drawn = None;
     }
 }
 
@@ -866,7 +892,7 @@ fn update_proxy<'a>(app: &'a mut PhotocraftApp, idx: usize, k: u32, params: &Val
         let map = displace_map(app, command, &scaled, k);
         let depth = lens_depth(app, idx, command, &scaled, k);
         let apply = apply_for(app, idx, command, &scaled, k);
-        let waiting = command == APPLY_IMAGE && apply.is_none();
+        let waiting = command == APPLY_IMAGE && apply.is_none() && app.filter_gpu_preview.as_ref().is_some_and(|p| p.apply_pending.is_some());
         let g = app.filter_gpu_preview.as_ref()?.proxy.as_ref()?;
         let Some((blur, region)) = blur_for(&g.base, g.target, &scaled, g.selection.clone(), g.measured, Inputs { map, depth, apply }) else {
             // A reach past the GPU's limit: the CPU preview for these settings.

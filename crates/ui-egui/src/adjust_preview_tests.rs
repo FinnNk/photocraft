@@ -398,9 +398,16 @@ fn a_reveal_all_mask_does_not_empty_the_damage_region() {
 #[test]
 fn a_closed_dialog_drops_its_gpu_proxy() {
     let _guard = photocraft_testkit::gpu_lock();
-    let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
-        eprintln!("skipping: no GPU adapter");
-        return;
+    let rs = match std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) {
+        Ok(rs) => rs,
+        Err(error) => {
+            // A run that asks for the GPU tests fails rather than skipping them.
+            if std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_some() {
+                std::panic::resume_unwind(error);
+            }
+            eprintln!("skipping: no GPU adapter");
+            return;
+        }
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.set_wgpu(rs);

@@ -636,7 +636,7 @@ fn main() {
         // as the CPU preview scales it, composited whole (it is small) per slider step.
         let k = photocraft_ui_egui::proxy::factor(&doc);
         if k == 1 {
-            b.skipped.push(json!({"rows": "zoomed out", "why": "a document this small previews at 100 %"}));
+            b.skipped.push(json!({"rows": "(GPU resident, zoomed out)", "why": "a document this small previews at 100 %"}));
         }
         if k > 1 {
             let proxy = photocraft_ui_egui::adjust_preview::proxy_base(&doc, k);
