@@ -391,3 +391,30 @@ fn a_reveal_all_mask_does_not_empty_the_damage_region() {
     assert_eq!(region, bounds, "the whole document, not the mask's empty content");
     assert!(!live_switch_damage(&mut app, k2, region, bounds).is_empty(), "something is composited");
 }
+
+/// Closing the dialog drops its zoomed-out proxy too: a filter dialog's GPU preview draws into the
+/// same proxy texture, so a reopened adjustment with the same settings must draw it again rather
+/// than take the old `drawn` hash for what the texture holds.
+#[test]
+fn a_closed_dialog_drops_its_gpu_proxy() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.set_wgpu(rs);
+    app.run("file.new", json!({"width": 2600, "height": 2000})).unwrap();
+    app.run("edit.fill", json!({"color": "#3366cc"})).unwrap();
+    let open = |app: &mut PhotocraftApp| crate::adjust_dialog::open(app, "image.adjustments.levels").unwrap();
+    let id = open(&mut app);
+    let frame = gpu_proxy(&mut app, 0, 0.25).expect("a zoomed-out preview");
+    assert!(frame.stale, "drawn the first time");
+    proxy_drawn(&mut app, &frame);
+    assert!(!gpu_proxy(&mut app, 0, 0.25).unwrap().stale, "then kept");
+    crate::dialogs::cancel(&mut app, id).unwrap();
+    assert!(gpu_proxy(&mut app, 0, 0.25).is_none(), "closed");
+    assert!(app.adjust_preview.as_ref().is_none_or(|p| p.proxy.is_none()), "its proxy went with it");
+    open(&mut app);
+    assert!(gpu_proxy(&mut app, 0, 0.25).expect("reopened").stale, "the same settings draw again");
+}

@@ -2050,8 +2050,15 @@ impl Compositor {
         // a drag doesn't upload every window again at each step. The blur and its output cover
         // only the part this refresh draws.
         let needed = region.inflate(blur.reach());
+        // A whole-extent program has one window for every cell (they share its key): the extent
+        // rounded out to whole tiles holds every cell's part of it (cells are tile-aligned, and
+        // the last ones reach past an extent that doesn't end on a tile), and a held window that
+        // covers it is kept. Per cell, the window changed at the canvas's edge, so each such cell
+        // uploaded the whole layer again.
+        let whole_window = tile_grid(blur.extent).union(&region);
         let window = match self.residents.get(&wk).map(|r| r.region) {
-            _ if whole => blur.extent.union(&region),
+            Some(held) if whole && held.contains_rect(&whole_window) => held,
+            _ if whole => whole_window,
             Some(held) if held.contains_rect(&needed) => held,
             _ => region.inflate(operator::apron(blur.reach().saturating_add(blur.reach() / 4))),
         };
@@ -2153,7 +2160,9 @@ impl Compositor {
         let map_input = match &blur.blur {
             SeparableBlur::Remap(r) => match &r.mapping {
                 operator::Mapping::Displace { map, map_size, .. } => Some((Arc::clone(map), *map_size)),
-                _ => Some((Arc::new(vec![[0.0; 4]]), [1, 1])),
+                // One stand-in for all of them: its identity is part of the map's fingerprint, so a
+                // new one per call uploaded it and ran the passes again on every refresh.
+                _ => Some((Arc::clone(&MAP_STAND_IN), [1, 1])),
             },
             _ => None,
         };
@@ -2922,6 +2931,9 @@ fn batch_kernel(run: &[plan::Pass<'_>]) -> Kernel {
     let normal = |p: &plan::Pass<'_>| p.mode == photocraft_color::BlendMode::Normal && p.flags & (plan::F_TEXT_GAMMA | plan::F_LAB) == 0;
     if run.iter().all(normal) { Kernel::LayerBatchNormal } else { Kernel::LayerBatch }
 }
+
+/// The 1×1 map a remap other than Displace binds.
+static MAP_STAND_IN: std::sync::LazyLock<Arc<Vec<[f32; 4]>>> = std::sync::LazyLock::new(|| Arc::new(vec![[0.0; 4]]));
 
 /// Canvas rounded out to whole tiles.
 fn tile_grid(canvas: Rect) -> Rect {

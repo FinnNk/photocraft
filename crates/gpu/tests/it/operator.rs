@@ -253,6 +253,43 @@ fn two_operators_on_one_layer_fail_the_render() {
     assert!(photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_ok(), "one is fine");
 }
 
+/// A whole-extent operator (a distort) uploads its window once: a slider step reruns the passes
+/// without uploading anything. Its window was different at the canvas's edge cells (the
+/// 300 × 200 canvas doesn't end on a page), and a non-Displace remap made a new map stand-in each
+/// call: both uploaded again on every step.
+#[test]
+fn a_whole_extent_window_is_uploaded_once() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (doc, id) = blur_doc(SampleType::U8);
+    let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+    let twirl = |angle: f32| {
+        let params = FilterParams::Twirl { angle };
+        let (warp, _) = photocraft_algo::separable::Warp::of(&params, doc.bounds()).unwrap();
+        let photocraft_algo::separable::Warp::Twirl { angle } = warp else { panic!("twirl") };
+        let d = photocraft_gpu::RemapParams {
+            mapping: photocraft_gpu::Mapping::Twirl { angle },
+            bounds: doc.bounds(),
+            undefined: photocraft_gpu::Undefined::Repeat,
+        };
+        let area = photocraft_algo::output_area(&params, content, doc.bounds(), None);
+        let program = GaussianBlur::new(SeparableBlur::Remap(Arc::new(d)), edge_extent(doc.bounds(), content), area, None, false, doc.depth).unwrap();
+        LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) }
+    };
+    for (label, comp) in [("", &mut g.comp), (" (paged)", &mut g.paged)] {
+        comp.set_operators(doc.id, vec![twirl(120.0)]);
+        photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+        for angle in [121.0, 122.0] {
+            comp.set_operators(doc.id, vec![twirl(angle)]);
+            let step = photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap().1;
+            assert!(step.operator_cells > 0, "{label} {angle}°: the passes run");
+            assert_eq!(step.bytes_uploaded, 0, "{label} {angle}°: nothing uploaded");
+        }
+    }
+}
+
 #[test]
 fn blur_descriptions_the_passes_cant_run_are_refused() {
     let r = Rect::new(0, 0, 10, 10);
