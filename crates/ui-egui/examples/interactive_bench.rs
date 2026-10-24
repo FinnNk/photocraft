@@ -556,6 +556,39 @@ fn main() {
             std::hint::black_box(photocraft_algo::apply(surf, &fp, photocraft_algo::output_area(&fp, content, doc.bounds(), None), doc.bounds(), None));
             println!("  (the CPU's Lens Blur r 30 over the whole layer: {:.0} ms)", ms(t));
         }
+        // Apply Image: the merged image onto the layer in Overlay, per opacity step; its source is
+        // made once per dialog session (timed here once).
+        let t = Instant::now();
+        let inputs = photocraft_ui_egui::filter_gpu_preview::apply_inputs(&doc, target, &json!({})).expect("the source");
+        println!("  (Apply Image's source, made once per session: {:.0} ms)", ms(t));
+        let apply = |opacity: f64| {
+            let a = photocraft_ui_egui::filter_gpu_preview::apply_params(&json!({"blending": "overlay", "opacity": opacity}), inputs.clone())
+                .expect("the settings");
+            let program =
+                photocraft_gpu::GaussianBlur::new(photocraft_gpu::SeparableBlur::Apply(std::sync::Arc::new(a)), extent, doc.bounds(), None, false, doc.depth)
+                    .expect("a runnable apply image");
+            photocraft_gpu::LayerOperator { layer: target, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
+        };
+        if let Some(g) = &mut b.gpu {
+            g.comp.set_operators(doc.id, vec![apply(80.0)]);
+        }
+        let first = b.render(&doc, view);
+        println!("  (GPU-resident Apply Image: first frame with the source upload {first:.1} ms)");
+        let mut step = 0;
+        b.time("Apply Image (Overlay) dialog preview (GPU resident)", |b| {
+            step += 1;
+            if let Some(g) = &mut b.gpu {
+                g.comp.set_operators(doc.id, vec![apply(80.0 + (step % 2) as f64)]);
+            }
+            b.render(&doc, view)
+        });
+        {
+            let mut cpu = Session::new();
+            cpu.add_document((*doc).clone(), None);
+            let t = Instant::now();
+            exec(&mut cpu, "image.applyImage", json!({"blending": "overlay", "opacity": 80}));
+            println!("  (the CPU's Apply Image over the whole layer: {:.0} ms)", ms(t));
+        }
         if let Some(g) = &mut b.gpu {
             g.comp.clear_operators(doc.id);
         }

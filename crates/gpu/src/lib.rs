@@ -57,8 +57,8 @@ use photocraft_raster::{Surface, Tile};
 
 pub use health::{DeviceHealth, Fault};
 pub use operator::{
-    Combine, GaussianBlur, LayerOperator, LensDepth, LensParams, MAX_DISC_RADIUS, Mapping, OperatorInput, OperatorProgram, OperatorTarget, RemapParams,
-    SeparableBlur, Undefined,
+    ApplyBlend, ApplyParams, Combine, GaussianBlur, LayerOperator, LensDepth, LensParams, MAX_DISC_RADIUS, Mapping, OperatorInput, OperatorProgram,
+    OperatorTarget, RemapParams, SeparableBlur, Undefined,
 };
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
@@ -179,7 +179,7 @@ impl TexKind {
             Role::Mask if f == PixelFormat::GRAY8 => TexKind::R8Direct,
             Role::Mask if f.sample == SampleType::F32 => TexKind::R32F,
             Role::Mask => TexKind::R16F,
-            Role::Operator | Role::OperatorSource | Role::OperatorMask | Role::OperatorMap => TexKind::Rgba32F,
+            Role::Operator | Role::OperatorSource | Role::OperatorMask | Role::OperatorMap | Role::OperatorWeight => TexKind::Rgba32F,
         }
     }
     fn format(self) -> wgpu::TextureFormat {
@@ -2148,29 +2148,43 @@ impl Compositor {
                 changed = true;
             }
         }
-        // Lens Blur's depth map over the output, once per map (`op_pins` holds it).
-        let depth_key = (op.layer, Role::OperatorMap, cell);
-        if let SeparableBlur::Lens(lens) = &blur.blur
-            && let operator::LensDepth::Map(depth) = &lens.depth
-        {
+        // A document surface the program reads at the output's pixels (Lens Blur's depth, Apply
+        // Image's source and weight), over the output, once per surface (`op_pins` holds it).
+        let mut input = |s: &mut Self, key: ResKey, label: &'static str, input: &Arc<Surface>, stats: &mut Stats| -> Option<()> {
             let print = {
                 let mut h = std::collections::hash_map::DefaultHasher::new();
-                std::hash::Hash::hash(&(Arc::as_ptr(depth) as usize, region), &mut h);
+                std::hash::Hash::hash(&(Arc::as_ptr(input) as usize, region), &mut h);
                 std::hash::Hasher::finish(&h)
             };
-            if fresh(self, &depth_key, region, print) {
-                touch(self, &depth_key);
+            if fresh(s, &key, region, print) {
+                touch(s, &key);
             } else {
-                let texture = self.create_layer_texture(device, &desc("pc_operator_depth", region), depth_key, bytes(region), stats)?;
-                let k: Vec<[f32; 4]> = operator::read_selection(depth, region).into_iter().map(|v| [v, 0.0, 0.0, 0.0]).collect();
-                operator::write_texels(queue, &texture, region.width(), region.height(), &k);
-                self.staged += bytes(region);
-                let resident = self.operator_resident(texture, region, surface, doc);
-                self.residents.insert(depth_key, resident);
-                self.op_made.insert(depth_key, print);
-                self.op_pins.insert(depth_key, Arc::clone(depth));
+                let texture = s.create_layer_texture(device, &desc(label, region), key, bytes(region), stats)?;
+                operator::write_texels(queue, &texture, region.width(), region.height(), &operator::read_input(input, region));
+                s.staged += bytes(region);
+                stats.bytes_uploaded += bytes(region) as usize;
+                let resident = s.operator_resident(texture, region, surface, doc);
+                s.residents.insert(key, resident);
+                s.op_made.insert(key, print);
+                s.op_pins.insert(key, Arc::clone(input));
                 changed = true;
             }
+            Some(())
+        };
+        let (depth_key, weight_key) = ((op.layer, Role::OperatorMap, cell), (op.layer, Role::OperatorWeight, cell));
+        match &blur.blur {
+            SeparableBlur::Lens(lens) => {
+                if let operator::LensDepth::Map(depth) = &lens.depth {
+                    input(self, depth_key, "pc_operator_depth", depth, stats)?;
+                }
+            }
+            SeparableBlur::Apply(a) => {
+                input(self, depth_key, "pc_operator_apply_source", &a.source, stats)?;
+                if let Some(w) = &a.weight {
+                    input(self, weight_key, "pc_operator_apply_weight", w, stats)?;
+                }
+            }
+            _ => {}
         }
         // The output: redrawn when the program, the window or the selection changed.
         let print = {
@@ -2221,6 +2235,14 @@ impl Compositor {
                     let out = region.translate(-sub.x0, -sub.y0);
                     operator::record_lens(device, encoder, kit, lens, &source, origin, size, [sub.x0, sub.y0], out, &depth, surface.format(), scratch)?
                 }
+                SeparableBlur::Apply(a) => {
+                    let input = self.residents.get(&depth_key).map(|r| r.texture.clone())?;
+                    let weight = match a.weight {
+                        Some(_) => Some(self.residents.get(&weight_key).map(|r| r.texture.clone())?),
+                        None => None,
+                    };
+                    operator::record_apply(device, encoder, kit, a, &source, origin, size, &input, weight.as_ref(), surface.format(), scratch)?
+                }
                 other => operator::record_blur(device, encoder, kit, other, &source, origin, size, scratch)?,
             };
             let fmt = surface.format();
@@ -2249,7 +2271,7 @@ impl Compositor {
             self.op_made.insert(ok, print);
             stats.operator_cells += 1;
         }
-        for k in [wk, ok, mk, map_key, depth_key] {
+        for k in [wk, ok, mk, map_key, depth_key, weight_key] {
             if let Some(r) = self.residents.get_mut(&k) {
                 r.last_used = self.frame;
                 r.stamp = self.stamp;

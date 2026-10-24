@@ -729,3 +729,10 @@ title = "Lens Blur r 30 (hexagon, Specular Highlights) dialog slider step, GPU r
 issue = 5772
 bench = "interactive_bench"
 row = "Lens Blur r 30 (hexagon) dialog preview (GPU resident)"
+
+[[scenario]]
+id = "P85"
+title = "Apply Image (Overlay, merged source) dialog opacity step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Apply Image (Overlay) dialog preview (GPU resident)"
