@@ -744,6 +744,7 @@ issue = 5772
 bench = "interactive_bench"
 row = "Twirl 120° dialog preview (GPU resident)"
 budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 5.9 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
 id = "P83"
@@ -752,3 +753,4 @@ issue = 5772
 bench = "interactive_bench"
 row = "Wave (5 generators) dialog preview (GPU resident)"
 budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 4.9 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
