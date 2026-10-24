@@ -84,12 +84,12 @@ Baseline: 2026-10-05, commit `f5d2bcb54a`, Apple M4 Pro (48 GB), GPU Apple M4 Pr
 | P65 | Smart Blur r 12 on 24 MP (High quality) | ≤ 1000 ms p95 | – | – | – | – | – | not run | [#211](https://github.com/storytold/photocraft/issues/211) |
 | P66 | Relight on 24 MP | ≤ 1000 ms p95 | – | – | – | – | – | not run | [#211](https://github.com/storytold/photocraft/issues/211) |
 | P67 | Reduce Noise on 24 MP | ≤ 1000 ms p95 | – | – | – | – | – | not run | [#211](https://github.com/storytold/photocraft/issues/211) |
-| P68 | Filter dialog preview canvas upload at k 1, 36 MP, 1920x1080 view (display + texels) | track only | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
-| P69 | Filter dialog preview window texture at k 1, 36 MP | track only | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
-| P70 | Gaussian Blur dialog slider step r 40, GPU resident, 36 MP, 1920x1080 view | track only | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
-| P71 | Gaussian Blur dialog slider step r 250, GPU resident, 36 MP, 1920x1080 view | track only | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
-| P72 | Gaussian Blur dialog slider step r 40, GPU resident, zoomed out (proxy), 36 MP | track only | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
-| P73 | Gaussian Blur dialog slider step r 250, GPU resident, zoomed out (proxy), 36 MP | track only | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
+| P68 | Filter dialog preview canvas upload at k 1, 36 MP, 1920x1080 view (display + texels) | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
+| P69 | Filter dialog preview window texture at k 1, 36 MP | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
+| P70 | Gaussian Blur dialog slider step r 40, GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
+| P71 | Gaussian Blur dialog slider step r 250, GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
+| P72 | Gaussian Blur dialog slider step r 40, GPU resident, zoomed out (proxy), 36 MP | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
+| P73 | Gaussian Blur dialog slider step r 250, GPU resident, zoomed out (proxy), 36 MP | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 | P74 | Unsharp Mask dialog slider step r 4, GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 | P75 | Unsharp Mask dialog slider step r 40, GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 | P76 | Minimum r 10 (square) dialog slider step, GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
