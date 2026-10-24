@@ -165,11 +165,10 @@ pub struct FilterGpuPreview {
 }
 
 /// The Navigator's picture while the filter previews on the GPU: the CPU preview's own filter
-/// run on a proxy of the Navigator's size (its operator lives on the main canvas, whose texture
-/// is only drawn where the view is).
+/// run at a factor `k` that keeps it the Navigator's size (its operator lives on the main canvas,
+/// whose texture is only drawn where the view is).
 struct NavigatorProxy {
     k: u32,
-    base: Arc<Document>,
     /// The settings hash shown and the filtered proxy.
     shown: Option<(u64, Arc<Document>)>,
 }
@@ -519,7 +518,13 @@ fn apply_for(app: &mut PhotocraftApp, idx: usize, command: &str, params: &Value,
                     }
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
                 },
-                // Another source or mask (or none yet): make this one.
+                // A build for another source or mask still running: one at a time (each holds the
+                // canvas's planes, about a gigabyte at 36 MP), so this one waits for it to finish.
+                Some((pk, rx)) if matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                    p.apply_pending = Some((pk, rx));
+                    return None;
+                }
+                // None yet, or the other one is done: make this one.
                 _ => {
                     let (doc, target) = match &p.proxy {
                         Some(g) if k > 1 => (Arc::clone(&g.base), g.target),
@@ -678,20 +683,33 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             }
             return None;
         }
-        log::debug!("filter preview on the GPU: {command}");
+        // Settings this session couldn't run (Displace without a map, a reach past the limit) stay
+        // on the CPU without measuring and building again every frame; new settings try again.
+        let settings = hash(&[params.to_string().as_bytes()]);
+        if app.filter_gpu_refused == Some((session, settings)) {
+            return None;
+        }
         hide(app);
         let st = app.session.documents().get(idx)?;
         let selection = st.doc.selection.clone().map(Arc::new);
-        let measured = Measured::of(&st.doc, target, command, targets(app))?;
-        let made = make_map(app, command, &params, 1, &[]);
-        let st = app.session.documents().get(idx)?;
-        // Apply Image changes the whole canvas: its inputs aren't needed for the region.
-        let region = if command == APPLY_IMAGE {
-            st.doc.bounds()
-        } else {
-            let inputs = Inputs { map: made.as_ref().map(|(_, m)| m.clone()), ..Default::default() };
-            blur_for(&st.doc, target, &params, selection.clone(), measured, inputs)?.1
+        let made = Measured::of(&st.doc, target, command, targets(app)).and_then(|measured| {
+            let made = make_map(app, command, &params, 1, &[]);
+            let st = app.session.documents().get(idx)?;
+            // Apply Image changes the whole canvas: its inputs aren't needed for the region.
+            let region = if command == APPLY_IMAGE {
+                st.doc.bounds()
+            } else {
+                let inputs = Inputs { map: made.as_ref().map(|(_, m)| m.clone()), ..Default::default() };
+                blur_for(&st.doc, target, &params, selection.clone(), measured, inputs)?.1
+            };
+            Some((measured, made, region))
+        });
+        let Some((measured, made, region)) = made else {
+            app.filter_gpu_refused = Some((session, settings));
+            return None;
         };
+        app.filter_gpu_refused = None;
+        log::debug!("filter preview on the GPU: {command}");
         app.filter_gpu_preview = Some(FilterGpuPreview {
             s: PreviewSession::new(TAG, SESSION_BITS, doc_id, revision, session, region),
             dialog: dialog_id,
@@ -747,16 +765,26 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
     hide_proxy(app);
     let p = app.filter_gpu_preview.as_ref()?;
     if p.shown.as_ref().is_none_or(|(sh, _)| *sh != h) {
+        if app.filter_gpu_refused == Some((session, h)) {
+            return None;
+        }
         let map = displace_map(app, command, &params, 1);
         let depth = lens_depth(app, idx, command, &params, 1);
         let apply = apply_for(app, idx, command, &params, 1);
+        // Apply Image's inputs still being made: the CPU preview meanwhile, not a refusal.
+        let waiting = command == APPLY_IMAGE && apply.is_none();
         let p = app.filter_gpu_preview.as_ref()?;
         let st = app.session.documents().get(idx)?;
         let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone(), p.measured, Inputs { map, depth, apply }) else {
-            // Settings the GPU can't run (a reach past its limit): the CPU preview for them.
+            // Settings the GPU can't run (a reach past its limit, Displace without a map): the
+            // CPU preview for them, without building again every frame.
             hide(app);
+            if !waiting {
+                app.filter_gpu_refused = Some((session, h));
+            }
             return None;
         };
+        app.filter_gpu_refused = None;
         let op = LayerOperator { layer: p.target, target: p.measured.on, program: Arc::new(blur) };
         if let Some(gpu) = app.gpu.as_ref() {
             gpu.set_operators(doc_id, vec![op.clone()]);
@@ -825,20 +853,30 @@ fn update_proxy<'a>(app: &'a mut PhotocraftApp, idx: usize, k: u32, params: &Val
         let g = FilterProxy { k, base: Arc::new(base), target, selection, measured, shown: None, drawn: None, region };
         app.filter_gpu_preview.as_mut()?.proxy = Some(g);
     }
+    // (Refused settings at this factor are kept apart from the full-size ones.)
+    let refused = (app.filter_gpu_preview.as_ref()?.s.session.wrapping_add(u64::from(k)), h);
     let g = app.filter_gpu_preview.as_ref()?.proxy.as_ref()?;
     if g.shown.as_ref().is_none_or(|(sh, _)| *sh != h) {
+        if app.filter_gpu_refused == Some(refused) {
+            return None;
+        }
         let mut scaled = params.clone();
         crate::filter_dialog::scale_preview_params(g.measured.command, &mut scaled, k);
         let command = g.measured.command;
         let map = displace_map(app, command, &scaled, k);
         let depth = lens_depth(app, idx, command, &scaled, k);
         let apply = apply_for(app, idx, command, &scaled, k);
+        let waiting = command == APPLY_IMAGE && apply.is_none();
         let g = app.filter_gpu_preview.as_ref()?.proxy.as_ref()?;
         let Some((blur, region)) = blur_for(&g.base, g.target, &scaled, g.selection.clone(), g.measured, Inputs { map, depth, apply }) else {
             // A reach past the GPU's limit: the CPU preview for these settings.
             hide_proxy(app);
+            if !waiting {
+                app.filter_gpu_refused = Some(refused);
+            }
             return None;
         };
+        app.filter_gpu_refused = None;
         let op = LayerOperator { layer: g.target, target: g.measured.on, program: Arc::new(blur) };
         if let Some(gpu) = app.gpu.as_ref() {
             gpu.set_operators(g.base.id, vec![op.clone()]);
@@ -929,8 +967,7 @@ pub fn navigator_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Documen
     let k = (longest / crate::canvas::NAVIGATOR_SIDE).max(1);
     let target = p.target;
     if p.nav.as_ref().is_none_or(|n| n.k != k) {
-        let base = Arc::new(crate::adjust_preview::proxy_base(&st.doc, k));
-        app.filter_gpu_preview.as_mut()?.nav = Some(NavigatorProxy { k, base, shown: None });
+        app.filter_gpu_preview.as_mut()?.nav = Some(NavigatorProxy { k, shown: None });
     }
     let n = app.filter_gpu_preview.as_ref()?.nav.as_ref()?;
     if let Some((sh, doc)) = &n.shown
@@ -938,10 +975,23 @@ pub fn navigator_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Documen
     {
         return Some((doc.clone(), h ^ NAVIGATOR_KEY));
     }
-    let mut scaled = params;
-    crate::filter_dialog::scale_preview_params(command, &mut scaled, k);
-    let doc = crate::filter_dialog::preview_document(&n.base, Some(crate::adjust_preview::proxy_layer(target)), command, &scaled, 1)?;
-    let doc = Arc::new(doc);
+    // As the CPU preview runs it: on the document at factor `k` (which scales the filter's
+    // lengths), with the open documents a filter reads (Displace's map, reduced the same way).
+    let documents: Vec<Arc<Document>> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
+    let st = app.session.documents().get(idx)?;
+    let ran = crate::filter_dialog::preview_document_for_target(
+        &st.doc,
+        Some(target),
+        command,
+        &params,
+        k,
+        None,
+        st.channel_view.target,
+        &documents,
+        &app.session.color.settings,
+    );
+    // Settings the filter refuses show the document, without running it again every frame.
+    let doc = Arc::new(ran.unwrap_or_else(|| crate::proxy::proxy_document(&st.doc, k)));
     app.filter_gpu_preview.as_mut()?.nav.as_mut()?.shown = Some((h, doc.clone()));
     Some((doc, h ^ NAVIGATOR_KEY))
 }

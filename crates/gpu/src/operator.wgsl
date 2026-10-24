@@ -925,6 +925,12 @@ fn apply_blending(cb: f32, cs: f32) -> f32 {
     return clamp(v, 0.0, 1.0);
 }
 
+// One colour channel `b` of the layer with the source's `t` blended on (`apply_image_pixel`).
+fn apply_channel(b: f32, t: f32, w: f32, base_a: f32, out_a: f32, preserve: bool) -> f32 {
+    let blended = t + (apply_blending(b, t) - t) * base_a;
+    return select((w * blended + base_a * (1.0 - w) * b) / out_a, b + (blended - b) * w, preserve);
+}
+
 @compute @workgroup_size(8, 8)
 fn apply_pass(@builtin(global_invocation_id) g: vec3<u32>) {
     if g.x >= ap.size.x || g.y >= ap.size.y {
@@ -945,16 +951,12 @@ fn apply_pass(@builtin(global_invocation_id) g: vec3<u32>) {
     }
     if w > 0.0 {
         let out_a = select(w + base_a * (1.0 - w), base_a, preserve);
-        var c = px.xyz;
-        for (var k = 0u; k < min(ap.colors, 3u); k++) {
-            let b = c[k];
-            let t = top[k];
-            let blended = t + (apply_blending(b, t) - t) * base_a;
-            c[k] = select((w * blended + base_a * (1.0 - w) * b) / out_a, b + (blended - b) * w, preserve);
-        }
+        // Each channel by name: no vector component chosen at run time (see the header).
+        let r = apply_channel(px.x, top.x, w, base_a, out_a, preserve);
+        var c = vec3<f32>(r);
         // A Grayscale layer's one channel stands for all three.
-        if ap.colors == 1u {
-            c = vec3<f32>(c.x);
+        if ap.colors > 1u {
+            c = vec3<f32>(r, apply_channel(px.y, top.y, w, base_a, out_a, preserve), apply_channel(px.z, top.z, w, base_a, out_a, preserve));
         }
         px = vec4<f32>(c, select(px.w, out_a, alpha));
     }

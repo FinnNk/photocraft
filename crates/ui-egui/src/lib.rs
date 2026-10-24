@@ -709,6 +709,9 @@ pub struct PhotocraftApp {
     /// The main canvas's last GPU view of each document (any preview key): the filter dialog's
     /// preview window draws from the same texture (`filter_gpu_preview`).
     pub(crate) canvas_gpu: HashMap<DocId, crate::gpu_canvas::ViewParams>,
+    /// A filter dialog's GPU preview that couldn't be set up for these settings (session and
+    /// settings hashes): not tried again every frame until the settings change.
+    pub(crate) filter_gpu_refused: Option<(u64, u64)>,
     /// Documents whose GPU canvas texture holds the plain document (`canvas::ensure_gpu`).
     navigator_plain: std::collections::HashSet<DocId>,
     /// The Info panel's Color Sampler readouts for (document, revision) (`panels::sampler_readouts`).
@@ -1034,6 +1037,7 @@ impl PhotocraftApp {
             display_memo: HashMap::new(),
             navigator_gpu: HashMap::new(),
             canvas_gpu: HashMap::new(),
+            filter_gpu_refused: None,
             navigator_plain: std::collections::HashSet::new(),
             info_samplers: None,
             monitors: Default::default(),

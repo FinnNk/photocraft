@@ -252,6 +252,14 @@ const MAX_TAPS: usize = 25;
 /// UI thread.
 pub const MAX_DISC_RADIUS: usize = 100;
 
+/// Most texels a kernel or a square Minimum/Maximum pass reads per pixel along each axis: about
+/// the disc's cost at [`MAX_DISC_RADIUS`]. Measured on an RTX 4090 Laptop at a 1920×1080 view, a
+/// square of radius 10 (21 texels) takes 2.1 ms and Unsharp Mask's 241-tap kernel (radius 40)
+/// 9.2 ms, so 601 texels comes to about 60 ms; on an integrated GPU, much more could run past
+/// the driver's timeout and lose the device. Past it (Unsharp Mask and High Pass above radius
+/// 100, squares above radius 300) the preview stays on the CPU.
+pub const MAX_AXIS_TAPS: usize = 601;
+
 impl SeparableBlur {
     /// How far outside an output pixel the blur reads, along each axis.
     pub fn reach(&self) -> i32 {
@@ -290,9 +298,9 @@ impl SeparableBlur {
     /// Whether the description is one the passes can run: an odd, finite kernel, or odd boxes.
     fn valid(&self) -> bool {
         match self {
-            SeparableBlur::Kernel(k) => k.len() % 2 == 1 && k.iter().all(|w| w.is_finite()),
+            SeparableBlur::Kernel(k) => k.len() % 2 == 1 && k.len() <= MAX_AXIS_TAPS && k.iter().all(|w| w.is_finite()),
             SeparableBlur::Boxes(b) => !b.is_empty() && b.iter().all(|w| w % 2 == 1),
-            SeparableBlur::Extreme { .. } => true,
+            SeparableBlur::Extreme { radius, .. } => (*radius as usize).saturating_mul(2).saturating_add(1) <= MAX_AXIS_TAPS,
             SeparableBlur::Disc { half_widths, .. } => half_widths.is_empty() || (half_widths.len() % 2 == 1 && half_widths.len() / 2 <= MAX_DISC_RADIUS),
             SeparableBlur::Convolve { taps, scale, offset } => {
                 taps.len() <= MAX_TAPS && taps.iter().all(|t| t.2.is_finite()) && scale.is_finite() && *scale != 0.0 && offset.is_finite()
@@ -735,7 +743,12 @@ impl OpKit {
 
 /// A storage-capable float texture for an operator's window or output.
 pub(crate) fn float_texture(device: &wgpu::Device, label: &str, w: u32, h: u32) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
+    device.create_texture(&float_desc(label, w, h))
+}
+
+/// The descriptor of a [`float_texture`].
+pub(crate) fn float_desc(label: &str, w: u32, h: u32) -> wgpu::TextureDescriptor<'_> {
+    wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
         mip_level_count: 1,
@@ -744,7 +757,7 @@ pub(crate) fn float_texture(device: &wgpu::Device, label: &str, w: u32, h: u32) 
         format: wgpu::TextureFormat::Rgba32Float,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
-    })
+    }
 }
 
 /// Upload straight RGBA `texels` (`w` wide) to `texture` at (0, 0).

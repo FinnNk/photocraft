@@ -17,3 +17,22 @@ fn validate(name: &str, src: &str) {
 fn the_operator_shader_validates() {
     validate("operator.wgsl", include_str!("../../src/operator.wgsl"));
 }
+
+/// FXC, the Direct3D 12 compiler wgpu uses by default, rejects what naga accepts (a vector
+/// component assigned at run time, X3500): the operator pipelines must build with it, or every
+/// layer operator falls back to the CPU on Direct3D 12. Windows only; skips without a DX12 adapter.
+#[cfg(windows)]
+#[test]
+fn the_operator_shader_builds_with_fxc() {
+    let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    desc.backends = wgpu::Backends::DX12;
+    desc.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::Fxc;
+    let Ok(adapter) = pollster::block_on(wgpu::Instance::new(desc).request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+        eprintln!("skipping: no DX12 adapter");
+        return;
+    };
+    let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) else { return };
+    let Ok(mut comp) = photocraft_gpu::Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba32Float) else { return };
+    assert!(comp.operators_supported(&device), "the operator pipelines build with FXC");
+}
