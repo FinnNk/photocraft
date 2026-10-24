@@ -51,7 +51,25 @@ pub enum SeparableBlur {
     Kernel(Vec<f32>),
     /// Running-mean box passes of these odd widths, in turn, along each axis.
     Boxes(Vec<usize>),
+    /// Minimum or Maximum over a square: per channel of the straight values (alpha included),
+    /// the extreme over `radius` texels each side along each axis in turn.
+    Extreme { radius: u32, max: bool },
+    /// Minimum or Maximum over a disc: on each row `dy` in `-r ..= r` (`r` = half the length),
+    /// the extreme over `half_widths[dy + r]` texels each side.
+    Disc { half_widths: Vec<u32>, max: bool },
+    /// A convolution of the straight colour values: the sum of `weight * texel(dx, dy)` over the
+    /// taps in order, divided by `scale` and offset by `offset`; alpha stays.
+    Convolve { taps: Vec<(i32, i32, f32)>, scale: f32, offset: f32 },
 }
+
+/// Most taps a [`SeparableBlur::Convolve`] may have (Custom's 5×5).
+const MAX_TAPS: usize = 25;
+
+/// Largest disc ([`SeparableBlur::Disc`]) the GPU runs: its pass reads every texel of the disc
+/// for every output pixel (about 450 at this radius; 16 ms a frame at radius 10 on an RTX 4090
+/// Laptop for a 1920×1080 view), so larger ones would block a slower GPU's frames for too long;
+/// those preview on the CPU, off the UI thread.
+pub const MAX_DISC_RADIUS: usize = 12;
 
 impl SeparableBlur {
     /// How far outside an output pixel the blur reads, along each axis.
@@ -59,8 +77,17 @@ impl SeparableBlur {
         let reach = match self {
             SeparableBlur::Kernel(k) => k.len() / 2,
             SeparableBlur::Boxes(boxes) => boxes.iter().fold(0usize, |sum, w| sum.saturating_add(w / 2)),
+            SeparableBlur::Extreme { radius, .. } => *radius as usize,
+            SeparableBlur::Disc { half_widths, .. } => (half_widths.iter().copied().max().unwrap_or(0) as usize).max(half_widths.len() / 2),
+            SeparableBlur::Convolve { taps, .. } => taps.iter().map(|&(dx, dy, _)| dx.unsigned_abs().max(dy.unsigned_abs()) as usize).max().unwrap_or(0),
         };
         i32::try_from(reach).unwrap_or(i32::MAX)
+    }
+
+    /// Whether the passes premultiply what they read (the blurs, as the CPU blurs do); the window
+    /// filters work on the straight values.
+    fn premultiplies(&self) -> bool {
+        matches!(self, SeparableBlur::Kernel(_) | SeparableBlur::Boxes(_))
     }
 
     /// Whether the description is one the passes can run: an odd, finite kernel, or odd boxes.
@@ -68,6 +95,11 @@ impl SeparableBlur {
         match self {
             SeparableBlur::Kernel(k) => k.len() % 2 == 1 && k.iter().all(|w| w.is_finite()),
             SeparableBlur::Boxes(b) => !b.is_empty() && b.iter().all(|w| w % 2 == 1),
+            SeparableBlur::Extreme { .. } => true,
+            SeparableBlur::Disc { half_widths, .. } => half_widths.is_empty() || (half_widths.len() % 2 == 1 && half_widths.len() / 2 <= MAX_DISC_RADIUS),
+            SeparableBlur::Convolve { taps, scale, offset } => {
+                taps.len() <= MAX_TAPS && taps.iter().all(|t| t.2.is_finite()) && scale.is_finite() && *scale != 0.0 && offset.is_finite()
+            }
         }
     }
 }
@@ -170,6 +202,11 @@ impl GaussianBlur {
         match &blur {
             SeparableBlur::Kernel(k) => (0u8, k.iter().map(|w| w.to_bits()).collect::<Vec<_>>()).hash(&mut h),
             SeparableBlur::Boxes(b) => (1u8, b).hash(&mut h),
+            SeparableBlur::Extreme { radius, max } => (4u8, radius, max).hash(&mut h),
+            SeparableBlur::Disc { half_widths, max } => (5u8, half_widths, max).hash(&mut h),
+            SeparableBlur::Convolve { taps, scale, offset } => {
+                (6u8, taps.iter().map(|&(dx, dy, w)| (dx, dy, w.to_bits())).collect::<Vec<_>>(), scale.to_bits(), offset.to_bits()).hash(&mut h)
+            }
         }
         (extent, area, keep_alpha, depth as u8).hash(&mut h);
         // The selection by identity: a dialog session holds one.
@@ -310,6 +347,9 @@ pub(crate) struct OpKit {
     finish_layout: wgpu::BindGroupLayout,
     kernel: wgpu::ComputePipeline,
     boxes: wgpu::ComputePipeline,
+    extreme: wgpu::ComputePipeline,
+    disc: wgpu::ComputePipeline,
+    convolve: wgpu::ComputePipeline,
     finish: wgpu::ComputePipeline,
 }
 
@@ -383,8 +423,11 @@ impl OpKit {
             };
             let kernel = pipeline(&blur_layout, "kernel_pass");
             let boxes = pipeline(&blur_layout, "box_pass");
+            let extreme = pipeline(&blur_layout, "extreme_pass");
+            let disc = pipeline(&blur_layout, "disc_pass");
+            let convolve = pipeline(&blur_layout, "convolve_pass");
             let finish = pipeline(&finish_layout, "finish");
-            OpKit { blur_layout, finish_layout, kernel, boxes, finish }
+            OpKit { blur_layout, finish_layout, kernel, boxes, extreme, disc, convolve, finish }
         });
         match error {
             None => Some(kit),
@@ -447,12 +490,20 @@ pub(crate) fn record_blur<'s>(
 ) -> Option<&'s wgpu::Texture> {
     use wgpu::util::DeviceExt;
     let axes: Vec<(usize, u32)> = match blur {
-        SeparableBlur::Kernel(_) => vec![(0, 0), (0, 1)],
+        SeparableBlur::Kernel(_) | SeparableBlur::Extreme { .. } => vec![(0, 0), (0, 1)],
         SeparableBlur::Boxes(b) => [0u32, 1].iter().flat_map(|&axis| (0..b.len()).map(move |i| (i, axis))).collect(),
+        // One 2D pass.
+        SeparableBlur::Disc { .. } | SeparableBlur::Convolve { .. } => vec![(0, 0)],
     };
     let weights: Vec<u8> = match blur {
         SeparableBlur::Kernel(k) => k.iter().flat_map(|w| w.to_le_bytes()).collect(),
-        SeparableBlur::Boxes(_) => 0f32.to_le_bytes().to_vec(),
+        SeparableBlur::Boxes(_) | SeparableBlur::Extreme { .. } => 0f32.to_le_bytes().to_vec(),
+        SeparableBlur::Disc { half_widths, .. } if half_widths.is_empty() => 0f32.to_le_bytes().to_vec(),
+        SeparableBlur::Disc { half_widths, .. } => half_widths.iter().flat_map(|w| (*w as f32).to_le_bytes()).collect(),
+        // [scale, offset, (dx, dy, weight)...]
+        SeparableBlur::Convolve { taps, scale, offset } => {
+            [*scale, *offset].into_iter().chain(taps.iter().flat_map(|&(dx, dy, w)| [dx as f32, dy as f32, w])).flat_map(|v| v.to_le_bytes()).collect()
+        }
     };
     let weights = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("pc_operator_weights"),
@@ -464,15 +515,21 @@ pub(crate) fn record_blur<'s>(
     for (n, &(i, axis)) in axes.iter().enumerate() {
         let src = if n == 0 { source } else { &ping[(n + 1) % 2] };
         let dst = &ping[n % 2];
+        // `radius`: the kernel's half-length, the box's or square's radius, the disc's rows each
+        // side, or the number of taps; `norm`: the box's 1 / width, or 1 for Maximum.
         let (radius, norm, pipeline) = match blur {
             SeparableBlur::Kernel(k) => ((k.len() / 2) as u32, 0.0f32, &kit.kernel),
             SeparableBlur::Boxes(b) => {
                 let w = b.get(i).copied().unwrap_or(1);
                 ((w / 2) as u32, 1.0 / w as f32, &kit.boxes)
             }
+            SeparableBlur::Extreme { radius, max } => (*radius, f32::from(u8::from(*max)), &kit.extreme),
+            SeparableBlur::Disc { half_widths, max } => ((half_widths.len() / 2) as u32, f32::from(u8::from(*max)), &kit.disc),
+            SeparableBlur::Convolve { taps, .. } => (taps.len() as u32, 0.0, &kit.convolve),
         };
         let (ox, oy) = if n == 0 { (origin[0], origin[1]) } else { (0, 0) };
-        let params = words(&[size[0], size[1], radius, axis, BOX_SEGMENT, u32::from(n == 0), u32::from(n == last), norm.to_bits(), ox, oy]);
+        let pre = blur.premultiplies();
+        let params = words(&[size[0], size[1], radius, axis, BOX_SEGMENT, u32::from(pre && n == 0), u32::from(pre && n == last), norm.to_bits(), ox, oy]);
         let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("pc_operator_pass"),
             contents: &params,
@@ -494,11 +551,11 @@ pub(crate) fn record_blur<'s>(
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &group, &[]);
         match blur {
-            SeparableBlur::Kernel(_) => pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1),
             SeparableBlur::Boxes(_) => {
                 let (lines, len) = if axis == 0 { (size[1], size[0]) } else { (size[0], size[1]) };
                 pass.dispatch_workgroups(lines.div_ceil(64), len.div_ceil(BOX_SEGMENT), 1);
             }
+            _ => pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1),
         }
     }
     ping.get(last % 2)

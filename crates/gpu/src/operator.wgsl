@@ -97,6 +97,72 @@ fn box_pass(@builtin(global_invocation_id) g: vec3<u32>) {
     }
 }
 
+// The extreme (Minimum, or Maximum when `p.norm` is 1) of the straight values within
+// `p.radius` texels each side along the pass's axis, per channel, alpha included
+// (`other::min_max`).
+@compute @workgroup_size(8, 8)
+fn extreme_pass(@builtin(global_invocation_id) g: vec3<u32>) {
+    if g.x >= p.size.x || g.y >= p.size.y {
+        return;
+    }
+    let line = select(g.x, g.y, p.axis == 0u);
+    let i = i32(select(g.y, g.x, p.axis == 0u));
+    let r = i32(p.radius);
+    var acc = load(texel(line, i - r));
+    for (var k = 1; k <= 2 * r; k++) {
+        let v = load(texel(line, i + k - r));
+        acc = select(min(acc, v), max(acc, v), p.norm > 0.5);
+    }
+    store(vec2<i32>(g.xy), acc);
+}
+
+// The texel at offset `d` from `at`, clamped to the window.
+fn texel2(at: vec2<i32>, d: vec2<i32>) -> vec2<i32> {
+    return clamp(at + d, vec2<i32>(0), vec2<i32>(p.size) - vec2<i32>(1));
+}
+
+// The extreme over a disc (`other::min_max_round`): on each row `dy` in `-r ..= r`, the window
+// of half-width `weights[dy + r]` (computed on the CPU with its own rule).
+@compute @workgroup_size(8, 8)
+fn disc_pass(@builtin(global_invocation_id) g: vec3<u32>) {
+    if g.x >= p.size.x || g.y >= p.size.y {
+        return;
+    }
+    let at = vec2<i32>(g.xy);
+    let r = i32(p.radius);
+    var acc = load(texel2(at, vec2<i32>(0, 0)));
+    for (var dy = -r; dy <= r; dy++) {
+        let hw = i32(weights[dy + r]);
+        for (var dx = -hw; dx <= hw; dx++) {
+            let v = load(texel2(at, vec2<i32>(dx, dy)));
+            acc = select(min(acc, v), max(acc, v), p.norm > 0.5);
+        }
+    }
+    store(at, acc);
+}
+
+// Custom (`other2::custom`): the straight colour values convolved by the taps in
+// `weights[2 + 3k ..]` (dx, dy, weight) in order, then `/ scale + offset` (`weights[0]`,
+// `weights[1]`); alpha stays the texel's own.
+@compute @workgroup_size(8, 8)
+fn convolve_pass(@builtin(global_invocation_id) g: vec3<u32>) {
+    if g.x >= p.size.x || g.y >= p.size.y {
+        return;
+    }
+    let at = vec2<i32>(g.xy);
+    let here = load(texel2(at, vec2<i32>(0, 0)));
+    if p.radius == 0u {
+        store(at, here);
+        return;
+    }
+    var acc = vec3<f32>(0.0);
+    for (var k = 0u; k < p.radius; k++) {
+        let d = vec2<i32>(i32(weights[2u + 3u * k]), i32(weights[3u + 3u * k]));
+        acc += load(texel2(at, d)).xyz * weights[4u + 3u * k];
+    }
+    store(at, vec4<f32>(acc / weights[0] + vec3<f32>(weights[1]), here.w));
+}
+
 // ---- The final pass: the filter's output as the layer's new pixels ----
 
 struct Finish {

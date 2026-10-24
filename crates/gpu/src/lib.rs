@@ -56,7 +56,7 @@ use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
 
 pub use health::{DeviceHealth, Fault};
-pub use operator::{Combine, GaussianBlur, LayerOperator, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur};
+pub use operator::{Combine, GaussianBlur, LayerOperator, MAX_DISC_RADIUS, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
 

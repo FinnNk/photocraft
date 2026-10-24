@@ -666,3 +666,24 @@ title = "Unsharp Mask dialog slider step r 40, GPU resident, 36 MP, 1920x1080 vi
 issue = 5772
 bench = "interactive_bench"
 row = "Unsharp Mask dialog preview r 40 (GPU resident)"
+
+[[scenario]]
+id = "P76"
+title = "Minimum r 10 (square) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Minimum r 10 (square) dialog preview (GPU resident)"
+
+[[scenario]]
+id = "P77"
+title = "Maximum r 10 (round) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Maximum r 10 (round) dialog preview (GPU resident)"
+
+[[scenario]]
+id = "P78"
+title = "Custom (Blur More's kernel) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Custom (Blur More's kernel) dialog preview (GPU resident)"
