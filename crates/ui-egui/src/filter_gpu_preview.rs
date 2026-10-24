@@ -706,6 +706,8 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         });
         let Some((measured, made, region)) = made else {
             app.filter_gpu_refused = Some((session, settings));
+            // Said once per refused settings (the refusal keeps them from being tried again).
+            log::debug!("filter preview on the CPU: the GPU operator or its inputs could not be built");
             return None;
         };
         app.filter_gpu_refused = None;
@@ -790,6 +792,8 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             hide(app);
             if !waiting {
                 app.filter_gpu_refused = Some((session, h));
+                // Said once per refused settings (the refusal keeps them from being tried again).
+                log::debug!("filter preview on the CPU: the GPU operator or its inputs could not be built");
             }
             return None;
         };
@@ -899,6 +903,8 @@ fn update_proxy<'a>(app: &'a mut PhotocraftApp, idx: usize, k: u32, params: &Val
             hide_proxy(app);
             if !waiting {
                 app.filter_gpu_refused = Some(refused);
+                // Said once per refused settings (the refusal keeps them from being tried again).
+                log::debug!("filter preview on the CPU: the GPU operator or its inputs could not be built");
             }
             return None;
         };
