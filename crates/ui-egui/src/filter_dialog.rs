@@ -1272,6 +1272,13 @@ pub struct FilterPreview {
     pub result: Option<Arc<Document>>,
     /// `result` flattened, as the worker composited it for the canvas upload. The preview window
     /// shows it rather than flattening the result again on the UI thread (#5772).
+    ///
+    /// Memory trade-off: this keeps a float composite of the preview alive for as long as the
+    /// preview is, including while the Preview box is off: 16 bytes a preview pixel, so with no
+    /// proxy (canvas at 100 %) about 384 MB at 24 MP and 552 MiB at 7360×4912. While a new result
+    /// replaces it, the old and new composites can briefly coexist. It is dropped with the
+    /// preview (Cancel, or once OK's job lands); without it the window flattened a composite of the same size on the
+    /// UI thread every time a result landed.
     pub flat: Option<Arc<photocraft_compose::Buffer>>,
     /// OK was pressed and the filter runs as a background job: the preview stays on screen until
     /// the job lands, so the canvas doesn't flash the unfiltered image in between.
