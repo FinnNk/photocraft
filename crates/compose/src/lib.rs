@@ -1648,10 +1648,19 @@ fn masked_change_bounds(layers: &[Layer], k: usize, outer: Option<(&[Layer], usi
         Some(bounds::content_bounds(&m.surface).intersect(&canvas))
     }
     // Where the adjustments in `l` can change the pixels beneath it (empty when none can). A
-    // clipped one changes its base's pixels under its mask, so its mask bounds it too.
+    // clipped one changes its base's pixels under its mask, so its mask bounds it too. A
+    // pass-through group that mixes its result with the backdrop (below 100 % opacity or fill, a
+    // mask, effects) recomputes every pixel it renders, which rounds even where nothing in it
+    // drew, so showing or hiding it isn't bounded.
     fn reach(l: &Layer, canvas: Rect, depth: usize) -> Option<Rect> {
         match &l.content {
             LayerContent::Adjustment(_) => mask_reach(l, canvas),
+            LayerContent::Group(_)
+                if l.blend == BlendMode::PassThrough
+                    && (l.opacity * l.fill_opacity < 1.0 || l.mask.is_some() || l.vector_mask.is_some() || effects::has_effects(l)) =>
+            {
+                None
+            }
             LayerContent::Group(g) if l.blend == BlendMode::PassThrough && depth < 256 => {
                 g.children.iter().try_fold(Rect::EMPTY, |acc, c| Some(union_nonempty(acc, reach(c, canvas, depth + 1)?)))
             }

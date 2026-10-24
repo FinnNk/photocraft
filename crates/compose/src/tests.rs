@@ -899,6 +899,50 @@ fn masked_adjustment_changes_only_its_mask_area() {
     assert_eq!(change_bounds_in(&open, 1, None, canvas, SampleType::F32), None);
 }
 
+/// #6533 review: a pass-through group below 100 % opacity mixes everything it renders with the
+/// backdrop, so hiding the group isn't bounded by its adjustments' masks; toggling a masked
+/// adjustment inside it still is (the mix is the same off the mask either way), compared exactly.
+#[test]
+fn masked_adjustment_in_a_translucent_pass_through_group() {
+    let canvas = Rect::new(0, 0, 10, 8);
+    let painted = Rect::new(2, 1, 5, 4);
+    let px_rect = Rect::new(6, 5, 9, 7);
+    let mut adj = Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert));
+    let mut m = LayerMask::hide_all();
+    m.surface.fill_rect(painted, &[1.0]);
+    adj.mask = Some(m);
+    let mut d = doc_f32(10, 8);
+    d.layers.push(solid_layer("under", canvas, [0.3, 0.55, 0.7, 0.6]));
+    let mut g = Layer::group("g", vec![solid_layer("in", px_rect, [0.2, 0.4, 0.6, 1.0]), adj]);
+    g.blend = BlendMode::PassThrough;
+    g.opacity = 0.37;
+    d.layers.push(g);
+    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas, SampleType::F32), None);
+    let mut faded_fill = d.layers.clone();
+    faded_fill[2].opacity = 1.0;
+    faded_fill[2].fill_opacity = 0.5;
+    assert_eq!(change_bounds_in(&faded_fill, 2, None, canvas, SampleType::F32), None);
+    let mut masked_group = d.layers.clone();
+    masked_group[2].opacity = 1.0;
+    masked_group[2].mask = Some(LayerMask::reveal_all());
+    assert_eq!(change_bounds_in(&masked_group, 2, None, canvas, SampleType::F32), None);
+    // Nested in an opaque pass-through group, the translucent one still reaches everywhere.
+    let mut outer = Layer::group("outer", vec![d.layers[2].clone()]);
+    outer.blend = BlendMode::PassThrough;
+    let nested = vec![d.layers[0].clone(), d.layers[1].clone(), outer];
+    assert_eq!(change_bounds_in(&nested, 2, None, canvas, SampleType::F32), None);
+    // The adjustment inside: bounded by its mask, and nothing else changes.
+    let LayerContent::Group(inner) = &d.layers[2].content else { panic!("group") };
+    assert_eq!(change_bounds_in(&inner.children, 1, Some((&d.layers, 2)), canvas, SampleType::F32), Some(painted));
+    let changed = toggled_pixels(&d, canvas, |d| {
+        if let LayerContent::Group(g) = &mut d.layers[2].content {
+            g.children[1].visible = false;
+        }
+    });
+    assert!(painted.contains_rect(&changed), "{changed:?} outside {painted:?}");
+    assert!(!changed.is_empty());
+}
+
 /// #6533 review: at 8 and 16 bits the compositor rounds the whole backdrop after every adjustment
 /// layer, so hiding one masked to a single pixel changes pixels outside its mask (a half-level
 /// backdrop rounds differently once inverted twice). The damage must cover every pixel that
