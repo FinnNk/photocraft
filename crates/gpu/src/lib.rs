@@ -57,7 +57,8 @@ use photocraft_raster::{Surface, Tile};
 
 pub use health::{DeviceHealth, Fault};
 pub use operator::{
-    Combine, GaussianBlur, LayerOperator, MAX_DISC_RADIUS, Mapping, OperatorInput, OperatorProgram, OperatorTarget, RemapParams, SeparableBlur, Undefined,
+    Combine, GaussianBlur, LayerOperator, LensDepth, LensParams, MAX_DISC_RADIUS, Mapping, OperatorInput, OperatorProgram, OperatorTarget, RemapParams,
+    SeparableBlur, Undefined,
 };
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
@@ -2147,6 +2148,30 @@ impl Compositor {
                 changed = true;
             }
         }
+        // Lens Blur's depth map over the output, once per map (`op_pins` holds it).
+        let depth_key = (op.layer, Role::OperatorMap, cell);
+        if let SeparableBlur::Lens(lens) = &blur.blur
+            && let operator::LensDepth::Map(depth) = &lens.depth
+        {
+            let print = {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                std::hash::Hash::hash(&(Arc::as_ptr(depth) as usize, region), &mut h);
+                std::hash::Hasher::finish(&h)
+            };
+            if fresh(self, &depth_key, region, print) {
+                touch(self, &depth_key);
+            } else {
+                let texture = self.create_layer_texture(device, &desc("pc_operator_depth", region), depth_key, bytes(region), stats)?;
+                let k: Vec<[f32; 4]> = operator::read_selection(depth, region).into_iter().map(|v| [v, 0.0, 0.0, 0.0]).collect();
+                operator::write_texels(queue, &texture, region.width(), region.height(), &k);
+                self.staged += bytes(region);
+                let resident = self.operator_resident(texture, region, surface, doc);
+                self.residents.insert(depth_key, resident);
+                self.op_made.insert(depth_key, print);
+                self.op_pins.insert(depth_key, Arc::clone(depth));
+                changed = true;
+            }
+        }
         // The output: redrawn when the program, the window or the selection changed.
         let print = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -2164,9 +2189,11 @@ impl Compositor {
                 None => self.create_layer_texture(device, &desc("pc_operator_output", region), ok, bytes(region), stats)?,
             };
             let size = [sub.width(), sub.height()];
+            // Lens Blur's prefix sums are one column wider than the window.
+            let scratch_size = if matches!(blur.blur, SeparableBlur::Lens(_)) { [size[0] + 1, size[1]] } else { size };
             let count = operator::scratch_count(&blur.blur);
-            if self.op_scratch.as_ref().is_none_or(|(s, t)| s[0] < size[0] || s[1] < size[1] || t.len() < count) {
-                let grown = self.op_scratch.as_ref().map_or(size, |(s, _)| [s[0].max(size[0]), s[1].max(size[1])]);
+            if self.op_scratch.as_ref().is_none_or(|(s, t)| s[0] < scratch_size[0] || s[1] < scratch_size[1] || t.len() < count) {
+                let grown = self.op_scratch.as_ref().map_or(scratch_size, |(s, _)| [s[0].max(scratch_size[0]), s[1].max(scratch_size[1])]);
                 let made = (0..count).map(|i| operator::float_texture(device, &format!("pc_operator_scratch{i}"), grown[0], grown[1])).collect();
                 self.op_scratch = Some((grown, made));
             }
@@ -2185,6 +2212,14 @@ impl Compositor {
                 SeparableBlur::Remap(d) => {
                     let map = self.residents.get(&map_key).map(|r| r.texture.clone())?;
                     operator::record_remap(device, encoder, kit, d, &source, window, &map, region, surface.format().alpha, scratch)?
+                }
+                SeparableBlur::Lens(lens) => {
+                    let depth = match &lens.depth {
+                        operator::LensDepth::Map(_) => self.residents.get(&depth_key).map(|r| r.texture.clone())?,
+                        _ => operator::float_texture(device, "pc_operator_depth_none", 1, 1),
+                    };
+                    let out = region.translate(-sub.x0, -sub.y0);
+                    operator::record_lens(device, encoder, kit, lens, &source, origin, size, [sub.x0, sub.y0], out, &depth, surface.format(), scratch)?
                 }
                 other => operator::record_blur(device, encoder, kit, other, &source, origin, size, scratch)?,
             };
@@ -2214,7 +2249,7 @@ impl Compositor {
             self.op_made.insert(ok, print);
             stats.operator_cells += 1;
         }
-        for k in [wk, ok, mk, map_key] {
+        for k in [wk, ok, mk, map_key, depth_key] {
             if let Some(r) = self.residents.get_mut(&k) {
                 r.last_used = self.frame;
                 r.stamp = self.stamp;

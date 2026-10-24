@@ -722,3 +722,10 @@ title = "Wave (5 generators) dialog slider step, GPU resident, 36 MP, 1920x1080 
 issue = 5772
 bench = "interactive_bench"
 row = "Wave (5 generators) dialog preview (GPU resident)"
+
+[[scenario]]
+id = "P84"
+title = "Lens Blur r 30 (hexagon, Specular Highlights) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Lens Blur r 30 (hexagon) dialog preview (GPU resident)"
