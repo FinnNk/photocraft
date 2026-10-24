@@ -124,6 +124,11 @@ fn a_proxy_preview_still_uploads_whole() {
     let (k, _, size) = ensure_filter_preview(&mut app, 0, &egui::Context::default()).expect("a preview");
     assert_eq!((k, size), (2, [1200, 1100]));
     assert_eq!(app.filter_preview.as_ref().unwrap().uploaded, DRect::new(0, 0, 1200, 1100));
+    // After Retry GPU (which clears the record) it goes up whole again, onto the new canvas.
+    let key = app.filter_preview.as_ref().unwrap().key.doc.0 ^ (1u64 << 61);
+    app.filter_preview.as_mut().unwrap().uploaded = DRect::EMPTY;
+    upload_filter_preview_view(&mut app, key, DRect::EMPTY);
+    assert_eq!(app.filter_preview.as_ref().unwrap().uploaded, DRect::new(0, 0, 1200, 1100), "uploaded again");
 }
 
 #[test]
