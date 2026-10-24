@@ -2030,6 +2030,23 @@ impl Compositor {
             return None;
         }
         let sub = if whole { region } else { region.inflate(operator::apron(blur.reach())).intersect(&window) };
+        // A texture past the device's size limit is a validation error, and on the web (where errors
+        // arrive asynchronously) one that takes the device with it: such a program previews on the
+        // CPU (a whole-extent window, or Displace's map, wider than the limit).
+        let max = device.limits().max_texture_dimension_2d;
+        let map_size = match &blur.blur {
+            SeparableBlur::Remap(r) => match &r.mapping {
+                operator::Mapping::Displace { map_size, .. } => *map_size,
+                _ => [1, 1],
+            },
+            _ => [1, 1],
+        };
+        let fits = |w: u32, h: u32| w <= max && h <= max;
+        // (Lens Blur's prefix sums are one column wider than `sub`.)
+        if !fits(window.width(), window.height()) || !fits(sub.width().saturating_add(1), sub.height()) || !fits(map_size[0], map_size[1]) {
+            self.layer_alloc = Some(format!("a layer operator needs a texture past the GPU's {max} px limit; full refresh on the CPU"));
+            return None;
+        }
         let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST;
         let desc = |label, r: Rect| wgpu::TextureDescriptor {
             label: Some(label),

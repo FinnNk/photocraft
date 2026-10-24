@@ -970,3 +970,39 @@ fn lens_blur_operators_match_the_cpu_filter() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Phase 5: a program needing a texture past the device's size limit (a whole-extent warp on a
+/// layer wider than it) falls back to the CPU without a validation error. On the web, where
+/// errors arrive asynchronously, an error would take the device with it.
+#[test]
+fn an_operator_past_the_texture_limit_falls_back_without_an_error() {
+    let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Ok(adapter) = pollster::block_on(wgpu::Instance::default().request_adapter(&wgpu::RequestAdapterOptions::default())) else { return };
+    let limits = wgpu::Limits { max_texture_dimension_2d: 256, ..adapter.limits() };
+    let descriptor = wgpu::DeviceDescriptor { required_limits: limits, ..Default::default() };
+    let Ok((device, queue)) = pollster::block_on(adapter.request_device(&descriptor)) else { return };
+    assert_eq!(device.limits().max_texture_dimension_2d, 256);
+    let Ok(mut comp) = Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba32Float) else { return };
+    if !comp.operators_supported(&device) {
+        return;
+    }
+    // 300 px wide: Twirl's window (the layer's whole extent) can't be one texture.
+    let (doc, id) = blur_doc(SampleType::U8);
+    let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+    let params = FilterParams::Twirl { angle: 90.0 };
+    let (warp, _) = photocraft_algo::separable::Warp::of(&params, doc.bounds()).unwrap();
+    let mapping = match warp {
+        photocraft_algo::separable::Warp::Twirl { angle } => photocraft_gpu::Mapping::Twirl { angle },
+        _ => unreachable!(),
+    };
+    let d = photocraft_gpu::RemapParams { mapping, bounds: doc.bounds(), undefined: photocraft_gpu::Undefined::Repeat };
+    let area = photocraft_algo::output_area(&params, content, doc.bounds(), None);
+    let program = GaussianBlur::new(SeparableBlur::Remap(Arc::new(d)), edge_extent(doc.bounds(), content), area, None, false, doc.depth).unwrap();
+    comp.set_operators(doc.id, vec![LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) }]);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let result = photocraft_gpu::render_to_vec_stats(&mut comp, &device, &queue, &doc, doc.bounds());
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "no validation error: {error:?}");
+    let message = result.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(message.contains("256 px limit"), "the refresh falls back to the CPU, saying why: {message:?}");
+}

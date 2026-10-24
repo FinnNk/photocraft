@@ -251,8 +251,12 @@ pub fn ineligible(app: &PhotocraftApp, idx: usize, params: &Value) -> Option<&'s
     if !gpu_view(app, idx) {
         return Some("the view is mirrored or pixel-aspect corrected");
     }
+    // No compute shaders (WebGL2, the web build's fallback), or a GPU canvas that failed.
+    if !gpu.operators_supported() {
+        return Some("the GPU canvas runs no layer operators (no compute shaders, as on WebGL2, or it failed)");
+    }
     // A canvas past the texture budget draws on the CPU, which can't show operators.
-    if !gpu.fits_canvas(doc) || !gpu.supports(doc) || !gpu.operators_supported() {
+    if !gpu.fits_canvas(doc) || !gpu.supports(doc) {
         return Some("the GPU compositor can't draw it");
     }
     None
@@ -662,12 +666,19 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
     let session = hash(&[&doc_id.0.to_le_bytes(), &revision.to_le_bytes(), &target.0.to_le_bytes(), &dialog_id.to_le_bytes(), &on, command.as_bytes()]);
     if app.filter_gpu_preview.as_ref().is_none_or(|p| p.s.session != session || p.s.doc != doc_id) {
         if let Some(reason) = ineligible(app, idx, &params) {
-            log::debug!("filter preview on the CPU: {reason}");
+            // Asked every frame while it stays on the CPU: said once per dialog and reason.
+            static SAID: std::sync::Mutex<Option<(u64, &str)>> = std::sync::Mutex::new(None);
+            let mut said = SAID.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *said != Some((dialog_id, reason)) {
+                log::debug!("filter preview on the CPU: {reason}");
+                *said = Some((dialog_id, reason));
+            }
             if let Some(p) = app.filter_gpu_preview.take() {
                 clear_operators(app, p.s.doc);
             }
             return None;
         }
+        log::debug!("filter preview on the GPU: {command}");
         hide(app);
         let st = app.session.documents().get(idx)?;
         let selection = st.doc.selection.clone().map(Arc::new);
