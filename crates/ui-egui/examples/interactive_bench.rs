@@ -389,7 +389,9 @@ fn main() {
             photocraft_gpu::LayerOperator { layer: target, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
         };
         let blur_more = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 1.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 1.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-        let windows: [(&str, Box<dyn Fn(f32) -> photocraft_algo::FilterParams>); 3] = [
+        // A filter's params a slider step `d` away.
+        type ParamsAt = Box<dyn Fn(f32) -> photocraft_algo::FilterParams>;
+        let windows: [(&str, ParamsAt); 3] = [
             (
                 "Minimum r 10 (square)",
                 Box::new(|d| photocraft_algo::FilterParams::Minimum { radius: 10.0 + d, preserve: photocraft_algo::Preserve::Squareness }),
