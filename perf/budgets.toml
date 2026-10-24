@@ -690,6 +690,7 @@ issue = 5772
 bench = "interactive_bench"
 row = "Minimum r 10 (square) dialog preview (GPU resident)"
 budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 5.7 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
 id = "P77"
