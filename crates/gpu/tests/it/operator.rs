@@ -229,6 +229,22 @@ fn scratch_textures_go_with_the_last_operator() {
     assert_eq!(g.comp.operator_scratch_bytes(), 0, "no operator left: no scratch");
 }
 
+/// Two operators on one layer would share its pages (the second taking the first's output): the
+/// render refuses them, and the caller previews on the CPU.
+#[test]
+fn two_operators_on_one_layer_fail_the_render() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (doc, id) = blur_doc(SampleType::U8);
+    g.comp.set_operators(doc.id, vec![operator(&doc, id, 4.0, false), operator(&doc, id, 12.0, false)]);
+    let e = photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(e.contains("two layer operators on one layer"), "{e:?}");
+    g.comp.set_operators(doc.id, vec![operator(&doc, id, 4.0, false)]);
+    assert!(photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_ok(), "one is fine");
+}
+
 #[test]
 fn blur_descriptions_the_passes_cant_run_are_refused() {
     let r = Rect::new(0, 0, 10, 10);
