@@ -719,3 +719,4 @@ title = "Displace 10 % dialog slider step (map stretched, Wrap Around), GPU resi
 issue = 5772
 bench = "interactive_bench"
 row = "Displace dialog preview 10 % (GPU resident)"
+budget_ms = 16

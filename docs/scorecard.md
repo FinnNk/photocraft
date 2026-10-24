@@ -97,7 +97,7 @@ Baseline: 2026-10-05, commit `f5d2bcb54a`, Apple M4 Pro (48 GB), GPU Apple M4 Pr
 | P78 | Custom (Blur More's kernel) dialog slider step, GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 | P79 | Maximum r 40 (round) dialog slider step, GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 | P80 | Maximum r 100 (round) dialog slider step, GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
-| P81 | Displace 10 % dialog slider step (map stretched, Wrap Around), GPU resident, 36 MP, 1920x1080 view | track only | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
+| P81 | Displace 10 % dialog slider step (map stretched, Wrap Around), GPU resident, 36 MP, 1920x1080 view | ≤ 16 ms p95 | – | – | – | – | – | not run | [#5772](https://github.com/storytold/photocraft/issues/5772) |
 
 **Not measurable yet** (the code can't do it yet; no number is recorded):
 
