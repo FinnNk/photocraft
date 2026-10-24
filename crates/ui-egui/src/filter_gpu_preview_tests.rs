@@ -935,3 +935,45 @@ fn unsharp_mask_previews_on_the_gpu_proxy() {
     let plain = off(&photocraft_compose::flatten(&crate::adjust_preview::proxy_base(&h.state().session.active().unwrap().doc, 2)));
     assert!(plain > 10.0 / 255.0, "the unsharpened proxy is only {:.2}/255 off", plain * 255.0);
 }
+
+/// Phase 4: High Pass and Box Blur preview on the GPU at 100 %, matching the CPU preview.
+#[test]
+fn high_pass_and_box_blur_preview_on_the_gpu() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, mut open) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    for (command, params) in [(HIGH_PASS, json!({"radius": 6.0})), (BOX_BLUR, json!({"radius": 3.0})), (BOX_BLUR, json!({"radius": 12.0}))] {
+        crate::dialogs::cancel(h.state_mut(), open).unwrap();
+        open = crate::filter_dialog::open(h.state_mut(), command).unwrap();
+        {
+            let d = h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == open).unwrap();
+            for (k, v) in params.as_object().unwrap() {
+                d.fields.insert(k.clone(), v.clone());
+            }
+            d.fields.insert("__preview".into(), json!(true));
+        }
+        settle(&mut h, |app| on_gpu(app, 0));
+        assert!(h.state().filter_preview.as_ref().is_none_or(|p| p.result.is_none()), "{command}: the CPU preview stands aside");
+        let what = format!("{command} {params}");
+        let oracle = {
+            let st = h.state().session.active().unwrap();
+            std::sync::Arc::new(crate::filter_dialog::preview_document(&st.doc, st.active_layer, command, &params, 1).unwrap())
+        };
+        let plain = h.state().session.active().unwrap().doc.clone();
+        let shown = probes_named(&mut h, Some(&what));
+        let (mut checked, mut differs) = (0, 0);
+        for (p, px) in &shown {
+            let (want, alpha) = expected_in(h.state(), &oracle, *p);
+            if alpha < 0.999 {
+                continue;
+            }
+            assert!(within(&want, *px), "{what}: at {p:?} the canvas shows {px:?}, the CPU {want:?}");
+            checked += 1;
+            differs += usize::from(!within(&expected_around(h.state(), &plain, *p, 0).0, *px));
+        }
+        assert!(checked >= 40 && differs >= 10, "{what}: {checked} probes checked, {differs} differ from the unfiltered image");
+    }
+}

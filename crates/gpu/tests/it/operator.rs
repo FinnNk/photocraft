@@ -462,3 +462,54 @@ fn an_unsharp_mask_operator_matches_the_cpu_filter() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Phase 4: Box Blur (a uniform kernel up to radius 4, one box pass beyond) and High Pass (the
+/// exact blur as `0.5 + source - blurred`) as layer operators, against the CPU filters applied
+/// as the engine applies them.
+#[test]
+fn box_blur_and_high_pass_operators_match_the_cpu_filters() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        eprintln!("skipping box blur / high pass parity: no compute");
+        return;
+    }
+    let mut failures = Vec::new();
+    let cases = [
+        FilterParams::BoxBlur { radius: 2.0 },
+        FilterParams::BoxBlur { radius: 9.0 },
+        FilterParams::BoxBlur { radius: 40.0 },
+        FilterParams::HighPass { radius: 1.5 },
+        FilterParams::HighPass { radius: 10.0 },
+        FilterParams::HighPass { radius: 60.0 },
+    ];
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for params in &cases {
+            for selection in [false, true] {
+                let (mut doc, id) = blur_doc(depth);
+                if selection {
+                    doc.selection = Some(feathered_selection());
+                }
+                let what = format!("{depth:?} {params:?}{}", if selection { ", selection" } else { "" });
+                let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+                let sel_bounds = doc.selection.as_ref().map(Surface::content_bounds);
+                let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
+                let area = photocraft_algo::output_area(params, content, bounds, sel_bounds);
+                let extent = edge_extent(doc.bounds(), content);
+                let mut expected = doc.clone();
+                let surf = expected.layer_mut(id).unwrap().surface_mut().unwrap();
+                *surf = photocraft_algo::apply_in_with(surf, params, area, bounds, doc.selection.as_ref(), extent, &Interrupt::NONE).unwrap();
+                let blur = match Separable::of(params).expect("a separable blur") {
+                    Separable::Kernel(k) => SeparableBlur::Kernel(k),
+                    Separable::Boxes(b) => SeparableBlur::Boxes(b),
+                };
+                let program = GaussianBlur::new(blur, extent, area, doc.selection.clone().map(Arc::new), false, depth).expect("a runnable blur");
+                let program = if matches!(params, FilterParams::HighPass { .. }) { program.high_pass() } else { program };
+                let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) };
+                if let Err(e) = compare(&mut g, &doc, &op, &expected, tolerance(depth), &what) {
+                    failures.push(e);
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

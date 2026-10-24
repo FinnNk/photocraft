@@ -37,8 +37,14 @@ pub const COMMAND: &str = "filter.blur.gaussianBlur";
 /// Unsharp Mask: the same blur, combined with the source (`photocraft_gpu::Combine::Unsharp`).
 pub const UNSHARP: &str = "filter.sharpen.unsharpMask";
 
+/// High Pass: the same blur, as `0.5 + source - blurred` (`photocraft_gpu::Combine::HighPass`).
+pub const HIGH_PASS: &str = "filter.other.highPass";
+
+/// Box Blur: a uniform kernel or one box pass.
+pub const BOX_BLUR: &str = "filter.blur.boxBlur";
+
 /// The filters this path previews.
-pub const COMMANDS: [&str; 2] = [COMMAND, UNSHARP];
+pub const COMMANDS: [&str; 4] = [COMMAND, UNSHARP, HIGH_PASS, BOX_BLUR];
 
 /// One filter dialog's GPU preview session.
 pub struct FilterGpuPreview {
@@ -244,6 +250,7 @@ fn blur_for(
     // Unsharp Mask combines the blur with the source.
     let op = match fp {
         photocraft_algo::FilterParams::UnsharpMask { amount, threshold, .. } => op.unsharp(amount, threshold)?,
+        photocraft_algo::FilterParams::HighPass { .. } => op.high_pass(),
         _ => op,
     };
     Some((op, area.intersect(&doc.bounds())))

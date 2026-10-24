@@ -130,6 +130,9 @@ pub enum Combine {
     /// source; a fully transparent source pixel and its alpha stay. `amount` is a fraction
     /// (Amount / 100), `threshold` a fraction of 1 (Threshold / 255).
     Unsharp { amount: f32, threshold: f32 },
+    /// High Pass (`photocraft_algo` `sharpen::high_pass`): per colour channel
+    /// `0.5 + source - blurred`; the source's alpha, fully transparent pixels untouched.
+    HighPass,
 }
 
 /// Gaussian Blur (or any separable blur) of a raster layer, exactly as the filter runs on the CPU
@@ -185,6 +188,13 @@ impl GaussianBlur {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         (self.key, 2u8, amount.to_bits(), threshold.to_bits()).hash(&mut h);
         Some(GaussianBlur { combine, key: h.finish(), ..self })
+    }
+
+    /// The same blur as High Pass combines it with the source.
+    pub fn high_pass(self) -> Self {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (self.key, 3u8).hash(&mut h);
+        GaussianBlur { combine: Combine::HighPass, key: h.finish(), ..self }
     }
 
     /// How far the blur reads outside an output pixel.
@@ -544,16 +554,20 @@ pub(crate) fn record_finish(
         u32::from(f.keep_alpha),
         f.levels.to_bits(),
         u32::from(f.has_alpha),
-        u32::from(matches!(f.combine, Combine::Unsharp { .. })),
+        match f.combine {
+            Combine::Blur => 0,
+            Combine::Unsharp { .. } => 1,
+            Combine::HighPass => 2,
+        },
         f.blur_offset[0],
         f.blur_offset[1],
         match f.combine {
             Combine::Unsharp { amount, .. } => amount.to_bits(),
-            Combine::Blur => 0,
+            Combine::Blur | Combine::HighPass => 0,
         },
         match f.combine {
             Combine::Unsharp { threshold, .. } => threshold.to_bits(),
-            Combine::Blur => 0,
+            Combine::Blur | Combine::HighPass => 0,
         },
     ]);
     let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
