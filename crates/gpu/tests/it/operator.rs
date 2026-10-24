@@ -263,6 +263,12 @@ fn blur_descriptions_the_passes_cant_run_are_refused() {
     assert!(GaussianBlur::new(SeparableBlur::Boxes(vec![4001]), r, r, None, false, SampleType::U8).is_none(), "reach past the limit");
     assert!(GaussianBlur::new(SeparableBlur::Kernel(vec![1.0]), Rect::EMPTY, r, None, false, SampleType::U8).is_none(), "no extent");
     assert!(GaussianBlur::new(SeparableBlur::Boxes(vec![5, 5, 7]), r, r, None, false, SampleType::U8).is_some());
+    // Per-pixel work past what a refresh should take (`MAX_AXIS_TAPS`): long kernels and wide squares.
+    let taps = photocraft_gpu::MAX_AXIS_TAPS;
+    assert!(GaussianBlur::new(SeparableBlur::Kernel(vec![1.0 / taps as f32; taps]), r, r, None, false, SampleType::U8).is_some(), "at the limit");
+    assert!(GaussianBlur::new(SeparableBlur::Kernel(vec![0.001; taps + 2]), r, r, None, false, SampleType::U8).is_none(), "a longer kernel");
+    let square = |radius: u32| GaussianBlur::new(SeparableBlur::Extreme { radius, max: true }, r, r, None, false, SampleType::U8);
+    assert!(square((taps / 2) as u32).is_some() && square((taps / 2) as u32 + 1).is_none(), "squares past radius 300");
 }
 
 /// What operators can't draw exactly fails the render (the caller previews on the CPU): a
