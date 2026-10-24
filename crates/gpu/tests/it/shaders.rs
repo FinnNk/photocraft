@@ -27,6 +27,9 @@ fn the_operator_shader_builds_with_fxc() {
     let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
     desc.backends = wgpu::Backends::DX12;
+    // As a release build compiles: with the debug-build default flags, wgpu asks FXC to skip
+    // optimisation, and FXC then accepts shaders a release build rejects (#8734).
+    desc.flags = wgpu::InstanceFlags::empty();
     desc.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::Fxc;
     let Ok(adapter) = pollster::block_on(wgpu::Instance::new(desc).request_adapter(&wgpu::RequestAdapterOptions::default())) else {
         eprintln!("skipping: no DX12 adapter");
