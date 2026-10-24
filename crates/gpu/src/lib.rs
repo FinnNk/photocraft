@@ -57,7 +57,8 @@ use photocraft_raster::{Surface, Tile};
 
 pub use health::{DeviceHealth, Fault};
 pub use operator::{
-    Combine, DisplaceParams, GaussianBlur, LayerOperator, MAX_DISC_RADIUS, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur, Undefined,
+    Combine, DisplaceParams, GaussianBlur, LayerOperator, MAX_AXIS_TAPS, MAX_DISC_RADIUS, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur,
+    Undefined,
 };
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
@@ -1034,6 +1035,11 @@ impl Compositor {
         self.residents.values().map(Resident::bytes).sum()
     }
 
+    /// GPU memory held by the layer operators' scratch textures (bytes).
+    pub fn operator_scratch_bytes(&self) -> u64 {
+        self.op_scratch.as_ref().map_or(0, |(s, t)| u64::from(s[0]) * u64::from(s[1]) * 16 * t.len() as u64)
+    }
+
     /// GPU memory held by cached pattern textures (bytes).
     pub fn pattern_cache_bytes(&self) -> u64 {
         self.patterns.values().map(|p| p.bytes).sum()
@@ -1121,15 +1127,19 @@ impl Compositor {
     /// layer unfiltered) when the device can't run them or their pages don't fit.
     pub fn set_operators(&mut self, doc: DocId, operators: Vec<LayerOperator>) {
         if operators.is_empty() {
-            self.operators.remove(&doc);
+            self.clear_operators(doc);
         } else {
             self.operators.insert(doc, operators);
         }
     }
 
-    /// [`Self::set_operators`] with none: the layers show their own pixels again.
+    /// [`Self::set_operators`] with none: the layers show their own pixels again. With no
+    /// operator left anywhere, their scratch textures go too.
     pub fn clear_operators(&mut self, doc: DocId) {
         self.operators.remove(&doc);
+        if self.operators.is_empty() {
+            self.op_scratch = None;
+        }
     }
 
     /// Whether `device` can run layer operators (compute passes into float storage textures).
@@ -1391,6 +1401,12 @@ impl Compositor {
                 return Err(Unsupported("a mask operator on a disabled or vector-combined mask (previewed on the CPU)".into()));
             }
         }
+        // An operator's pages are keyed by its layer: a second one on the same layer (its content
+        // and its mask, say) would take the first one's output.
+        let mut layers = std::collections::HashSet::new();
+        if ops.iter().any(|o| !layers.insert(o.layer)) {
+            return Err(Unsupported("two layer operators on one layer (previewed on the CPU)".into()));
+        }
         let plan = plan::plan_with(doc, ops.iter().map(|o| o.layer).collect())?;
         self.frame_ops = ops.clone();
         self.check_fx(doc, &plan)?;
@@ -1635,7 +1651,22 @@ impl Compositor {
         stats: &mut Stats,
     ) -> Option<wgpu::Texture> {
         let replaced = self.residents.get(&key).map_or(0, Resident::bytes);
-        let (n, dropped) = self.evict_residents(self.resident_budget, bytes.saturating_sub(replaced), Some(key));
+        self.create_budgeted(device, desc, bytes.saturating_sub(replaced), Some(key), stats)
+    }
+
+    /// A texture of `bytes` within the resident budget: pages not used this refresh are evicted to
+    /// make room (never `keep`), and once more after an out-of-memory error. A failure sets
+    /// `layer_alloc` (the refresh falls back to the CPU) rather than reaching the device's
+    /// uncaptured-error handler.
+    fn create_budgeted(
+        &mut self,
+        device: &wgpu::Device,
+        desc: &wgpu::TextureDescriptor<'_>,
+        bytes: u64,
+        keep: Option<ResKey>,
+        stats: &mut Stats,
+    ) -> Option<wgpu::Texture> {
+        let (n, dropped) = self.evict_residents(self.resident_budget, bytes, keep);
         stats.evicted += n;
         self.admit_freed = self.admit_freed.saturating_add(dropped);
         // WebGPU reports errors asynchronously: its failures reach the health callbacks.
@@ -1647,7 +1678,7 @@ impl Compositor {
             match error {
                 None => return Some(texture),
                 Some(wgpu::Error::OutOfMemory { .. }) if !retry => {
-                    let (n, dropped) = self.evict_residents(0, 0, Some(key));
+                    let (n, dropped) = self.evict_residents(0, 0, keep);
                     stats.evicted += n;
                     self.admit_freed = self.admit_freed.saturating_add(dropped);
                 }
@@ -2159,7 +2190,14 @@ impl Compositor {
             let count = operator::scratch_count(&blur.blur);
             if self.op_scratch.as_ref().is_none_or(|(s, t)| s[0] < size[0] || s[1] < size[1] || t.len() < count) {
                 let grown = self.op_scratch.as_ref().map_or(size, |(s, _)| [s[0].max(size[0]), s[1].max(size[1])]);
-                let made = (0..count).map(|i| operator::float_texture(device, &format!("pc_operator_scratch{i}"), grown[0], grown[1])).collect();
+                // Within the budget and its fallback, as layer pages are (the old set goes first).
+                self.op_scratch = None;
+                let mut made = Vec::with_capacity(count);
+                for i in 0..count {
+                    let label = format!("pc_operator_scratch{i}");
+                    let desc = operator::float_desc(&label, grown[0], grown[1]);
+                    made.push(self.create_budgeted(device, &desc, bytes(Rect::from_xywh(0, 0, grown[0], grown[1])), Some(ok), stats)?);
+                }
                 self.op_scratch = Some((grown, made));
             }
             let Some(source) = self.residents.get(&wk).map(|r| r.texture.clone()) else {

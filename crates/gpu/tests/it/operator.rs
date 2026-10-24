@@ -221,6 +221,38 @@ fn outputs_are_reused_until_the_operator_changes() {
     }
 }
 
+/// The operators' scratch textures go when the last operator does (they grew to the largest
+/// window and stayed for the rest of the session).
+#[test]
+fn scratch_textures_go_with_the_last_operator() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (doc, id) = blur_doc(SampleType::U8);
+    g.comp.set_operators(doc.id, vec![operator(&doc, id, 6.0, false)]);
+    photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+    assert!(g.comp.operator_scratch_bytes() > 0, "the passes made their scratch");
+    g.comp.set_operators(doc.id, Vec::new());
+    assert_eq!(g.comp.operator_scratch_bytes(), 0, "no operator left: no scratch");
+}
+
+/// Two operators on one layer would share its pages (the second taking the first's output): the
+/// render refuses them, and the caller previews on the CPU.
+#[test]
+fn two_operators_on_one_layer_fail_the_render() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (doc, id) = blur_doc(SampleType::U8);
+    g.comp.set_operators(doc.id, vec![operator(&doc, id, 4.0, false), operator(&doc, id, 12.0, false)]);
+    let e = photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(e.contains("two layer operators on one layer"), "{e:?}");
+    g.comp.set_operators(doc.id, vec![operator(&doc, id, 4.0, false)]);
+    assert!(photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_ok(), "one is fine");
+}
+
 #[test]
 fn blur_descriptions_the_passes_cant_run_are_refused() {
     let r = Rect::new(0, 0, 10, 10);
@@ -231,6 +263,12 @@ fn blur_descriptions_the_passes_cant_run_are_refused() {
     assert!(GaussianBlur::new(SeparableBlur::Boxes(vec![4001]), r, r, None, false, SampleType::U8).is_none(), "reach past the limit");
     assert!(GaussianBlur::new(SeparableBlur::Kernel(vec![1.0]), Rect::EMPTY, r, None, false, SampleType::U8).is_none(), "no extent");
     assert!(GaussianBlur::new(SeparableBlur::Boxes(vec![5, 5, 7]), r, r, None, false, SampleType::U8).is_some());
+    // Per-pixel work past what a refresh should take (`MAX_AXIS_TAPS`): long kernels and wide squares.
+    let taps = photocraft_gpu::MAX_AXIS_TAPS;
+    assert!(GaussianBlur::new(SeparableBlur::Kernel(vec![1.0 / taps as f32; taps]), r, r, None, false, SampleType::U8).is_some(), "at the limit");
+    assert!(GaussianBlur::new(SeparableBlur::Kernel(vec![0.001; taps + 2]), r, r, None, false, SampleType::U8).is_none(), "a longer kernel");
+    let square = |radius: u32| GaussianBlur::new(SeparableBlur::Extreme { radius, max: true }, r, r, None, false, SampleType::U8);
+    assert!(square((taps / 2) as u32).is_some() && square((taps / 2) as u32 + 1).is_none(), "squares past radius 300");
 }
 
 /// What operators can't draw exactly fails the render (the caller previews on the CPU): a

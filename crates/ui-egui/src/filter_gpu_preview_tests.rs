@@ -1154,3 +1154,26 @@ fn displace_with_an_open_map_document_previews_on_the_gpu() {
     h.run_steps(4);
     assert!(!on_gpu(h.state_mut(), 0), "no map, no GPU preview");
 }
+
+/// Only the main canvas gives the dialog's preview window its GPU view: an Arrange tile or a
+/// floating window (perhaps on another display) must not replace it.
+#[test]
+fn only_the_main_canvas_gives_the_preview_window_its_view() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.set_wgpu(rs);
+    app.run("file.new", json!({"width": 640, "height": 480})).unwrap();
+    let doc = app.session.active().unwrap().doc.id;
+    let ctx = egui::Context::default();
+    let view = app.ui.views[0].clone();
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    for primary in [false, true] {
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            crate::canvas::canvas_view(&mut app, ui, 0, rect, view.clone(), primary);
+        });
+        output.textures_delta.clear();
+        assert!(app.perf.gpu, "drawn on the GPU canvas");
+        assert_eq!(app.canvas_gpu.contains_key(&doc), primary, "primary {primary}");
+    }
+}
