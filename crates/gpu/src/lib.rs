@@ -1962,9 +1962,6 @@ impl Compositor {
         }
     }
 
-    /// Upload changed tiles of `surface` within `region` (its tile area inside one page cell);
-    /// returns the resident key and its region (x, y, w, h).
-    #[allow(clippy::too_many_arguments)]
     /// The page of `cell` that layer operator `op` outputs over `region` (the cell's part of the
     /// layer's pixels and what the operator changes), brought up to date: the window of the
     /// layer's `surface` it reads is uploaded when its tiles changed, and the passes run when the
@@ -2180,6 +2177,8 @@ impl Compositor {
         }
     }
 
+    /// Upload changed tiles of `surface` within `region` (its tile area inside one page cell);
+    /// returns the resident key and its region (x, y, w, h).
     #[allow(clippy::too_many_arguments)]
     fn sync(
         &mut self,
