@@ -268,11 +268,15 @@ fn main() {
             .expect("preview");
         let flat = photocraft_compose::flatten(&p);
         let display = s.color.canvas_display_for(&p, None).ok();
+        // Clipped to the composite: a `--size` smaller than the view or the window puts them partly
+        // outside it.
         let crop = |r: Rect| {
+            let r = r.intersect(&flat.rect);
             let stride = flat.rect.width() as usize;
-            let mut px = Vec::with_capacity(r.width() as usize * r.height() as usize);
+            let (x0, cw) = ((r.x0 - flat.rect.x0) as usize, r.width() as usize);
+            let mut px = Vec::with_capacity(cw * r.height() as usize);
             for y in r.y0..r.y1 {
-                px.extend_from_slice(&flat.px[y as usize * stride + r.x0 as usize..][..r.width() as usize]);
+                px.extend_from_slice(&flat.px[(y - flat.rect.y0) as usize * stride + x0..][..cw]);
             }
             photocraft_compose::Buffer { rect: r, px }
         };
@@ -281,13 +285,13 @@ fn main() {
                 Some(d) => d.texture_buffer(buf),
                 None => std::borrow::Cow::Borrowed(buf),
             };
-            std::hint::black_box(photocraft_ui_egui::gpu_canvas::texels(wgpu::TextureFormat::Rgba8Unorm, &texture.px));
+            std::hint::black_box(photocraft_ui_egui::gpu_canvas::texels(wgpu::TextureFormat::Rgba8Unorm, &texture.px).expect("the canvas format"));
         };
         // Converted straight from the composite, as the canvas does (a linear one is copied out and
         // sRGB-encoded first).
         b.time("filter preview canvas upload, k 1 (view, display + texels)", |_| {
             let t = Instant::now();
-            let view = Rect::from_xywh(w as i32 / 2 - 960 - 256, h as i32 / 2 - 540 - 256, 1920 + 512, 1080 + 512);
+            let view = Rect::from_xywh(w as i32 / 2 - 960 - 256, h as i32 / 2 - 540 - 256, 1920 + 512, 1080 + 512).intersect(&flat.rect);
             if display.as_deref().is_some_and(|d| d.encode_srgb) {
                 texels(&crop(view));
             } else {

@@ -398,7 +398,12 @@ impl OpKit {
 
 /// A storage-capable float texture for an operator's window or output.
 pub(crate) fn float_texture(device: &wgpu::Device, label: &str, w: u32, h: u32) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
+    device.create_texture(&float_desc(label, w, h))
+}
+
+/// The descriptor of a [`float_texture`].
+pub(crate) fn float_desc(label: &str, w: u32, h: u32) -> wgpu::TextureDescriptor<'_> {
+    wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
         mip_level_count: 1,
@@ -407,7 +412,7 @@ pub(crate) fn float_texture(device: &wgpu::Device, label: &str, w: u32, h: u32) 
         format: wgpu::TextureFormat::Rgba32Float,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
-    })
+    }
 }
 
 /// Upload straight RGBA `texels` (`w` wide) to `texture` at (0, 0).
