@@ -618,6 +618,7 @@ issue = 5772
 bench = "interactive_bench"
 row = "filter preview canvas upload, k 1 (view, display + texels)"
 budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 5.1 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
 id = "P69"
@@ -626,6 +627,7 @@ issue = 5772
 bench = "interactive_bench"
 row = "filter preview window texture, k 1"
 budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 1.8 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
 id = "P70"
@@ -661,6 +663,7 @@ issue = 5772
 bench = "interactive_bench"
 row = "Gaussian Blur dialog preview r 250 (GPU resident, zoomed out)"
 budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 4.6 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
 id = "P74"
@@ -669,6 +672,7 @@ issue = 5772
 bench = "interactive_bench"
 row = "Unsharp Mask dialog preview r 4 (GPU resident)"
 budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 4.0 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
 id = "P75"
@@ -677,6 +681,7 @@ issue = 5772
 bench = "interactive_bench"
 row = "Unsharp Mask dialog preview r 40 (GPU resident)"
 budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 9.3 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
 id = "P76"
@@ -685,6 +690,7 @@ issue = 5772
 bench = "interactive_bench"
 row = "Minimum r 10 (square) dialog preview (GPU resident)"
 budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 5.7 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
 id = "P77"
@@ -729,6 +735,7 @@ issue = 5772
 bench = "interactive_bench"
 row = "Displace dialog preview 10 % (GPU resident)"
 budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 5.6 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
 id = "P82"
