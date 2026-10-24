@@ -56,7 +56,9 @@ use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
 
 pub use health::{DeviceHealth, Fault};
-pub use operator::{Combine, GaussianBlur, LayerOperator, MAX_DISC_RADIUS, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur};
+pub use operator::{
+    Combine, DisplaceParams, GaussianBlur, LayerOperator, MAX_DISC_RADIUS, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur, Undefined,
+};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
 
@@ -176,7 +178,7 @@ impl TexKind {
             Role::Mask if f == PixelFormat::GRAY8 => TexKind::R8Direct,
             Role::Mask if f.sample == SampleType::F32 => TexKind::R32F,
             Role::Mask => TexKind::R16F,
-            Role::Operator | Role::OperatorSource | Role::OperatorMask => TexKind::Rgba32F,
+            Role::Operator | Role::OperatorSource | Role::OperatorMask | Role::OperatorMap => TexKind::Rgba32F,
         }
     }
     fn format(self) -> wgpu::TextureFormat {
@@ -205,6 +207,9 @@ impl TexKind {
 type ResidentRef = (usize, [i32; 4]);
 /// A page cell: the square `[x·page, (x+1)·page) × [y·page, (y+1)·page)` of document pixels.
 type Cell = (i32, i32);
+
+/// The cell key of an operator page shared by every cell (a whole-extent window, a map).
+const WHOLE: Cell = (i32::MIN, i32::MIN);
 /// A resident layer page.
 type ResKey = (LayerId, Role, Cell);
 /// Effect maps of a layer: over its whole effect region (`None`), or one page cell of a region
@@ -519,6 +524,9 @@ pub struct Compositor {
     /// The selection each operator mask page was made from: held while the page is, so no other
     /// selection can take its address (which the page's fingerprint hashes).
     op_pins: HashMap<ResKey, Arc<Surface>>,
+    /// The maps operator pages were made from: held so no other map can take the address the
+    /// page's fingerprint hashes.
+    op_maps: HashMap<ResKey, Arc<Vec<[f32; 4]>>>,
     /// The operators of the document the current refresh draws.
     frame_ops: Vec<LayerOperator>,
     /// The operator passes' scratch textures (two, or four for a disc), reused from cell to cell
@@ -871,6 +879,7 @@ impl Compositor {
             op_kit: None,
             op_made: HashMap::new(),
             op_pins: HashMap::new(),
+            op_maps: HashMap::new(),
             frame_ops: Vec::new(),
             op_scratch: None,
             frame_region: Rect::EMPTY,
@@ -904,6 +913,7 @@ impl Compositor {
         self.op_scratch = None;
         self.op_made.clear();
         self.op_pins.clear();
+        self.op_maps.clear();
         self.prefix.clear();
     }
 
@@ -1135,6 +1145,7 @@ impl Compositor {
         let residents = &self.residents;
         self.op_made.retain(|k, _| residents.contains_key(k));
         self.op_pins.retain(|k, _| residents.contains_key(k));
+        self.op_maps.retain(|k, _| residents.contains_key(k));
         self.fx.retain(|_, e| e.doc != doc);
         self.patterns.retain(|_, p| p.doc != doc);
         self.prefix.forget(doc);
@@ -1316,6 +1327,7 @@ impl Compositor {
         self.residents.clear();
         self.op_made.clear();
         self.op_pins.clear();
+        self.op_maps.clear();
         self.op_scratch = None;
         self.fx.clear();
         self.patterns.clear();
@@ -1532,6 +1544,7 @@ impl Compositor {
         let residents = &self.residents;
         self.op_made.retain(|k, _| residents.contains_key(k));
         self.op_pins.retain(|k, _| residents.contains_key(k));
+        self.op_maps.retain(|k, _| residents.contains_key(k));
         self.fx.retain(|(id, _), e| e.doc != doc.id || e.last_used == frame || live.contains(id));
         stats.evicted += self.evict().0;
         self.temps.retain(|(_, used)| frame.saturating_sub(*used) < 240);
@@ -1997,13 +2010,17 @@ impl Compositor {
             return None;
         }
         let operator::Program::Separable(blur) = op.program.program();
-        let (wk, ok, mk) = ((op.layer, Role::OperatorSource, cell), (op.layer, Role::Operator, cell), (op.layer, Role::OperatorMask, cell));
+        // A program that reads the whole extent has one window for every cell (uploaded once).
+        let whole = blur.blur.whole();
+        let source_cell = if whole { WHOLE } else { cell };
+        let (wk, ok, mk) = ((op.layer, Role::OperatorSource, source_cell), (op.layer, Role::Operator, cell), (op.layer, Role::OperatorMask, cell));
         // The cell's source window stays the same while the view moves (uploaded once) and while
         // a slider drag's reach still fits it; when it outgrows it, the new one has headroom, so
         // a drag doesn't upload every window again at each step. The blur and its output cover
         // only the part this refresh draws.
         let needed = region.inflate(blur.reach());
         let window = match self.residents.get(&wk).map(|r| r.region) {
+            _ if whole => blur.extent.union(&region),
             Some(held) if held.contains_rect(&needed) => held,
             _ => region.inflate(operator::apron(blur.reach().saturating_add(blur.reach() / 4))),
         };
@@ -2011,7 +2028,7 @@ impl Compositor {
         if region.is_empty() {
             return None;
         }
-        let sub = region.inflate(operator::apron(blur.reach())).intersect(&window);
+        let sub = if whole { region } else { region.inflate(operator::apron(blur.reach())).intersect(&window) };
         let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST;
         let desc = |label, r: Rect| wgpu::TextureDescriptor {
             label: Some(label),
@@ -2099,6 +2116,29 @@ impl Compositor {
                 changed = true;
             }
         }
+        // Displace's map, once per map (shared by every cell).
+        let map_key = (op.layer, Role::OperatorMap, WHOLE);
+        if let SeparableBlur::Displace(d) = &blur.blur {
+            let print = {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                std::hash::Hash::hash(&(Arc::as_ptr(&d.map) as usize, d.map_size), &mut h);
+                std::hash::Hasher::finish(&h)
+            };
+            let r = Rect::from_xywh(0, 0, d.map_size[0], d.map_size[1]);
+            if fresh(self, &map_key, r, print) {
+                touch(self, &map_key);
+            } else {
+                let texture = self.create_layer_texture(device, &desc("pc_operator_map", r), map_key, bytes(r), stats)?;
+                operator::write_texels(queue, &texture, r.width(), r.height(), &d.map);
+                self.staged += bytes(r);
+                stats.bytes_uploaded += bytes(r) as usize;
+                let resident = self.operator_resident(texture, r, surface, doc);
+                self.residents.insert(map_key, resident);
+                self.op_made.insert(map_key, print);
+                self.op_maps.insert(map_key, Arc::clone(&d.map));
+                changed = true;
+            }
+        }
         // The output: redrawn when the program, the window or the selection changed.
         let print = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -2133,7 +2173,13 @@ impl Compositor {
             });
             let (Some(Some(kit)), Some((_, scratch))) = (self.op_kit.as_ref(), self.op_scratch.as_ref()) else { return None };
             let origin = [(sub.x0 - window.x0) as u32, (sub.y0 - window.y0) as u32];
-            let blurred = operator::record_blur(device, encoder, kit, &blur.blur, &source, origin, size, scratch)?;
+            let blurred = match &blur.blur {
+                SeparableBlur::Displace(d) => {
+                    let map = self.residents.get(&map_key).map(|r| r.texture.clone())?;
+                    operator::record_displace(device, encoder, kit, d, &source, window, &map, region, surface.format().alpha, scratch)?
+                }
+                other => operator::record_blur(device, encoder, kit, other, &source, origin, size, scratch)?,
+            };
             let fmt = surface.format();
             operator::record_finish(
                 device,
@@ -2160,7 +2206,7 @@ impl Compositor {
             self.op_made.insert(ok, print);
             stats.operator_cells += 1;
         }
-        for k in [wk, ok, mk] {
+        for k in [wk, ok, mk, map_key] {
             if let Some(r) = self.residents.get_mut(&k) {
                 r.last_used = self.frame;
                 r.stamp = self.stamp;

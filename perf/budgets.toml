@@ -701,3 +701,10 @@ title = "Maximum r 100 (round) dialog slider step, GPU resident, 36 MP, 1920x108
 issue = 5772
 bench = "interactive_bench"
 row = "Maximum r 100 (round) dialog preview (GPU resident)"
+
+[[scenario]]
+id = "P81"
+title = "Displace 10 % dialog slider step (map stretched, Wrap Around), GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Displace dialog preview 10 % (GPU resident)"

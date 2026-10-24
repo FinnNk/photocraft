@@ -50,8 +50,17 @@ pub const MAXIMUM: &str = "filter.other.maximum";
 /// Custom: a 5×5 convolution (`SeparableBlur::Convolve`).
 pub const CUSTOM: &str = "filter.other.custom";
 
+/// Displace: the source sampled where an open document's map shifts it.
+pub const DISPLACE: &str = "filter.distort.displace";
+
 /// The filters this path previews.
-pub const COMMANDS: [&str; 7] = [COMMAND, UNSHARP, HIGH_PASS, BOX_BLUR, MINIMUM, MAXIMUM, CUSTOM];
+pub const COMMANDS: [&str; 8] = [COMMAND, UNSHARP, HIGH_PASS, BOX_BLUR, MINIMUM, MAXIMUM, CUSTOM, DISPLACE];
+
+/// Displace's map as the GPU uploads it: straight RGBA texels and their size.
+type Map = (Arc<Vec<[f32; 4]>>, [u32; 2]);
+
+/// What a session's map was made from: the map document, its revision, `mapLayer`, the factor.
+type MapKey = (DocId, u64, Option<u64>, u32);
 
 /// One filter dialog's GPU preview session.
 pub struct FilterGpuPreview {
@@ -81,6 +90,8 @@ pub struct FilterGpuPreview {
     proxy: Option<FilterProxy>,
     /// The Navigator's picture of the preview ([`navigator_doc`]).
     nav: Option<NavigatorProxy>,
+    /// Displace's maps (full size and the proxy's), made once each.
+    maps: Vec<(MapKey, Map)>,
 }
 
 /// The Navigator's picture while the filter previews on the GPU: the CPU preview's own filter
@@ -241,13 +252,32 @@ fn blur_for(
     params: &Value,
     selection: Option<Arc<photocraft_raster::Surface>>,
     measured: Measured,
+    map: Option<Map>,
 ) -> Option<(GaussianBlur, Rect)> {
     let Measured { command, on, content, selection: sel_bounds, depth } = measured;
     let fp = photocraft_engine::filters::params_for(command, params)?;
     let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
     let area = photocraft_algo::output_area(&fp, content, bounds, sel_bounds);
     let extent = photocraft_algo::separable::edge_extent(doc.bounds(), content);
-    let blur = gpu_blur(photocraft_algo::separable::Separable::of(&fp)?);
+    let blur = match fp {
+        // `distort2::displace`: the map from an open document, the scale in pixels.
+        photocraft_algo::FilterParams::Displace { horizontal, vertical, stretch, undefined, .. } => {
+            let (map, map_size) = map?;
+            SeparableBlur::Displace(Arc::new(photocraft_gpu::DisplaceParams {
+                map,
+                map_size,
+                bounds,
+                scale: [horizontal / 100.0 * 128.0, vertical / 100.0 * 128.0],
+                stretch,
+                undefined: match undefined {
+                    photocraft_algo::UndefinedAreas::Wrap => photocraft_gpu::Undefined::Wrap,
+                    photocraft_algo::UndefinedAreas::Repeat => photocraft_gpu::Undefined::Repeat,
+                    photocraft_algo::UndefinedAreas::Transparent => photocraft_gpu::Undefined::Transparent,
+                },
+            }))
+        }
+        _ => gpu_blur(photocraft_algo::separable::Separable::of(&fp)?),
+    };
     // Lock Transparency keeps a layer's alpha; a mask has none.
     let keep_alpha = on == OperatorTarget::Content && doc.effective_locks(target).transparency;
     let op = GaussianBlur::new(blur, extent, area, selection, keep_alpha, depth)?;
@@ -258,6 +288,45 @@ fn blur_for(
         _ => op,
     };
     Some((op, area.intersect(&doc.bounds())))
+}
+
+/// Displace's map for `params` at factor `k`, and what it was made from: the open document
+/// `mapDocument` names (an index or a name), reduced by `k` as the CPU preview reduces it,
+/// flattened or its `mapLayer`. `None` for any other filter, a map read from a file (`mapPath`,
+/// previewed on the CPU), or no map. A map already made from the same (in `cached`) is reused.
+fn make_map(app: &PhotocraftApp, command: &str, params: &Value, k: u32, cached: &[(MapKey, Map)]) -> Option<(MapKey, Map)> {
+    if command != DISPLACE || params.get("mapPath").and_then(Value::as_str).is_some_and(|p| !p.is_empty()) {
+        return None;
+    }
+    let docs = app.session.documents();
+    let st = match params.get("mapDocument")? {
+        Value::String(name) => docs.iter().find(|d| d.doc.name == *name || d.path.as_deref() == Some(name.as_str()))?,
+        v => docs.get(usize::try_from(v.as_i64()?).ok()?)?,
+    };
+    let layer = params.get("mapLayer").and_then(Value::as_u64);
+    let key = (st.doc.id, st.revision, layer, k);
+    if let Some((_, m)) = cached.iter().find(|(mk, _)| *mk == key) {
+        return Some((key, m.clone()));
+    }
+    let doc = if k > 1 { Arc::new(crate::proxy::proxy_document(&st.doc, k)) } else { st.doc.clone() };
+    let img = photocraft_engine::filters_ext::map_from_document(&doc, layer)?;
+    let size = [img.rect.width(), img.rect.height()];
+    let texels: Vec<[f32; 4]> = img.data.as_chunks::<4>().0.to_vec();
+    Some((key, (Arc::new(texels), size)))
+}
+
+/// [`make_map`] through the session's cache: a map is made once per document, revision, layer and
+/// factor (the session keeps one per factor).
+fn displace_map(app: &mut PhotocraftApp, command: &str, params: &Value, k: u32) -> Option<Map> {
+    let cached = app.filter_gpu_preview.as_ref().map(|p| p.maps.clone()).unwrap_or_default();
+    let (key, map) = make_map(app, command, params, k, &cached)?;
+    if let Some(p) = app.filter_gpu_preview.as_mut()
+        && !p.maps.iter().any(|(mk, _)| *mk == key)
+    {
+        p.maps.retain(|(mk, _)| mk.3 != k);
+        p.maps.push((key, map.clone()));
+    }
+    Some(map)
 }
 
 /// algo's description of a CPU filter (`photocraft_algo::separable`) as the GPU operator's.
@@ -329,7 +398,9 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         let st = app.session.documents().get(idx)?;
         let selection = st.doc.selection.clone().map(Arc::new);
         let measured = Measured::of(&st.doc, target, command, targets(app))?;
-        let (_, region) = blur_for(&st.doc, target, &params, selection.clone(), measured)?;
+        let made = make_map(app, command, &params, 1, &[]);
+        let st = app.session.documents().get(idx)?;
+        let (_, region) = blur_for(&st.doc, target, &params, selection.clone(), measured, made.as_ref().map(|(_, m)| m.clone()))?;
         app.filter_gpu_preview = Some(FilterGpuPreview {
             s: PreviewSession::new(TAG, SESSION_BITS, doc_id, revision, session, region),
             dialog: dialog_id,
@@ -344,6 +415,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             window: std::cell::Cell::new(None),
             proxy: None,
             nav: None,
+            maps: made.into_iter().collect(),
         });
     }
     let p = app.filter_gpu_preview.as_ref()?;
@@ -380,8 +452,10 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
     hide_proxy(app);
     let p = app.filter_gpu_preview.as_ref()?;
     if p.shown.as_ref().is_none_or(|(sh, _)| *sh != h) {
+        let map = displace_map(app, command, &params, 1);
+        let p = app.filter_gpu_preview.as_ref()?;
         let st = app.session.documents().get(idx)?;
-        let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone(), p.measured) else {
+        let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone(), p.measured, map) else {
             // Settings the GPU can't run (a reach past its limit): the CPU preview for them.
             hide(app);
             return None;
@@ -448,7 +522,10 @@ fn update_proxy<'a>(app: &'a mut PhotocraftApp, idx: usize, k: u32, params: &Val
     if g.shown.as_ref().is_none_or(|(sh, _)| *sh != h) {
         let mut scaled = params.clone();
         crate::filter_dialog::scale_preview_params(g.measured.command, &mut scaled, k);
-        let Some((blur, region)) = blur_for(&g.base, g.target, &scaled, g.selection.clone(), g.measured) else {
+        let command = g.measured.command;
+        let map = displace_map(app, command, &scaled, k);
+        let g = app.filter_gpu_preview.as_ref()?.proxy.as_ref()?;
+        let Some((blur, region)) = blur_for(&g.base, g.target, &scaled, g.selection.clone(), g.measured, map) else {
             // A reach past the GPU's limit: the CPU preview for these settings.
             hide_proxy(app);
             return None;
