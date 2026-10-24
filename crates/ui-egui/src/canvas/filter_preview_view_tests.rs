@@ -85,14 +85,23 @@ fn a_full_resolution_preview_uploads_the_view_then_what_a_pan_uncovers() {
         upload_filter_preview_view(&mut app, key, a);
         assert_eq!(app.perf.last_refresh_px, 0, "{depth}-bit: an unchanged view uploads nothing");
 
-        // A pan to the far corner uploads only what the texture didn't have.
-        let b = DRect::new(1500, 1100, 2048, 1536);
-        upload_filter_preview_view(&mut app, key, b);
+        // A jump to the far corner, away from what is there, uploads that view alone, not the
+        // gap between them.
+        let c = DRect::new(1700, 1300, 2048, 1536);
+        upload_filter_preview_view(&mut app, key, c);
         let second = app.filter_preview.as_ref().unwrap().uploaded;
-        assert!(second.contains_rect(&first) && second.contains_rect(&b));
-        assert_eq!(app.perf.last_refresh_px, area(second) - area(first), "{depth}-bit: only the uncovered strips");
-        assert_preview_pixels(&mut app, a);
+        assert!(second.contains_rect(&c) && second.intersect(&first).is_empty(), "{depth}-bit: {second:?}");
+        assert_eq!(app.perf.last_refresh_px, area(second), "{depth}-bit: the new view only");
+        assert_preview_pixels(&mut app, c);
+
+        // A pan from there that overlaps uploads only what the texture didn't have.
+        let b = DRect::new(1300, 900, 1900, 1300);
+        upload_filter_preview_view(&mut app, key, b);
+        let third = app.filter_preview.as_ref().unwrap().uploaded;
+        assert!(third.contains_rect(&second) && third.contains_rect(&b));
+        assert_eq!(app.perf.last_refresh_px, area(third) - area(second), "{depth}-bit: only the uncovered strips");
         assert_preview_pixels(&mut app, b);
+        assert_preview_pixels(&mut app, c);
 
         // A new result starts again from what the view shows.
         app.filter_preview = None;

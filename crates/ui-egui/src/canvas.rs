@@ -2406,6 +2406,9 @@ fn upload_filter_preview_view(app: &mut PhotocraftApp, key: u64, visible: photoc
         return;
     }
     let t0 = crate::gpu_canvas::now_ms();
+    // A jump to a part that doesn't meet what is there uploads only the new part: the union would
+    // send the whole gap between them too. What was there stays on the texture, unrecorded.
+    let have = if have.intersect(&want).is_empty() { photocraft_geom::Rect::EMPTY } else { have };
     let target = have.union(&want);
     let (display, _) = canvas_display(app, &result, None);
     let mut px = 0u64;
