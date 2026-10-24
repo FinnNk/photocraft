@@ -274,7 +274,7 @@ fn main() {
                 Some(d) => d.texture_buffer(&flat),
                 None => std::borrow::Cow::Borrowed(&flat),
             };
-            std::hint::black_box(photocraft_ui_egui::gpu_canvas::texels(wgpu::TextureFormat::Rgba8Unorm, &texture.px));
+            std::hint::black_box(photocraft_ui_egui::gpu_canvas::texels(wgpu::TextureFormat::Rgba8Unorm, &texture.px).expect("the canvas format"));
             ms(t)
         });
         b.time("filter preview window texture, k 1", |_| {
