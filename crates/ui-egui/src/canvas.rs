@@ -2566,7 +2566,9 @@ fn upload_filter_preview_view(app: &mut PhotocraftApp, key: u64, visible: photoc
         if !uploaded {
             // No texture to add to (the device was lost or the size changed): upload it whole.
             // If that fails too (an unhealthy GPU), nothing is recorded, so a later frame tries again.
-            let whole = gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &photocraft_compose::flatten(&result)), result.depth);
+            // The worker's composite when there is one: flattening again is a full CPU composite.
+            let buffer = flat.clone().unwrap_or_else(|| std::sync::Arc::new(photocraft_compose::flatten(&result)));
+            let whole = gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buffer), result.depth);
             px = if whole { result.size.area() } else { 0 };
             if let Some(p) = app.filter_preview.as_mut() {
                 p.uploaded = if whole { result.bounds() } else { photocraft_geom::Rect::EMPTY };
