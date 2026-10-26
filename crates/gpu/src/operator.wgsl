@@ -252,12 +252,83 @@ fn reduce(x: f32) -> f32 {
     return r;
 }
 
+// Sine and cosine of `x`, reduced as above and then to an eighth of a turn, where Cephes'
+// single-precision `sinf`/`cosf` polynomials hold to about an ulp. WGSL only asks a built-in `sin`
+// for an absolute error of 2^-11: enough, on some GPUs (Intel's, WARP), to move a distort's samples a
+// visible fraction of a pixel from the CPU's.
+fn sin_cos(x: f32) -> vec2<f32> {
+    let r = reduce(x);
+    let j = floor(r / (PI / 2.0) + 0.5);
+    let y = (r - j * 1.5707964) + j * 4.371139e-8;
+    let z = y * y;
+    let s = ((-1.9515296e-4 * z + 8.332161e-3) * z - 1.6666655e-1) * z * y + y;
+    let c = ((2.4433157e-5 * z - 1.3887316e-3) * z + 4.1666646e-2) * z * z - 0.5 * z + 1.0;
+    switch u32(j) % 4u {
+        case 0u: { return vec2<f32>(s, c); }
+        case 1u: { return vec2<f32>(c, -s); }
+        case 2u: { return vec2<f32>(-s, -c); }
+        default: { return vec2<f32>(-c, s); }
+    }
+}
+
 fn sin_r(x: f32) -> f32 {
-    return sin(reduce(x));
+    return sin_cos(x).x;
 }
 
 fn cos_r(x: f32) -> f32 {
-    return cos(reduce(x));
+    return sin_cos(x).y;
+}
+
+// Arcsine and arctangent as polynomials (Cephes' single-precision `asinf` and `atanf`), accurate to
+// a few ulps everywhere. Built-in `asin` and `atan2` aren't held to that: WARP's are off by enough
+// to move Spherize's and ZigZag's samples a visible fraction of a pixel from the CPU's.
+fn asin_p(x: f32) -> f32 {
+    let a = abs(x);
+    var y: f32;
+    if a > 0.5 {
+        let z = 0.5 * (1.0 - a);
+        let s = sqrt(z);
+        let p = (((4.2163199048e-2 * z + 2.4181311049e-2) * z + 4.5470025998e-2) * z + 7.4953002686e-2) * z + 1.6666752422e-1;
+        y = PI / 2.0 - 2.0 * (s + s * z * p);
+    } else {
+        let z = a * a;
+        let p = (((4.2163199048e-2 * z + 2.4181311049e-2) * z + 4.5470025998e-2) * z + 7.4953002686e-2) * z + 1.6666752422e-1;
+        y = a + a * z * p;
+    }
+    return select(y, -y, x < 0.0);
+}
+
+// Arctangent of `t` >= 0.
+fn atan_p(t: f32) -> f32 {
+    var x = t;
+    var y0 = 0.0;
+    if x > 2.4142137 {
+        y0 = PI / 2.0;
+        x = -1.0 / x;
+    } else if x > 0.41421357 {
+        y0 = PI / 4.0;
+        x = (x - 1.0) / (x + 1.0);
+    }
+    let z = x * x;
+    return y0 + (((8.05374449538e-2 * z - 1.38776856032e-1) * z + 1.99777106478e-1) * z - 3.33329491539e-1) * z * x + x;
+}
+
+fn atan2_p(y: f32, x: f32) -> f32 {
+    let ax = abs(x);
+    let ay = abs(y);
+    if ax == 0.0 && ay == 0.0 {
+        return 0.0;
+    }
+    // The angle from the nearer axis, so the ratio stays at or below 1.
+    var t = atan_p(min(ax, ay) / max(ax, ay));
+    if ay > ax {
+        t = PI / 2.0 - t;
+    }
+    if x < 0.0 {
+        t = PI - t;
+    }
+    // By the sign bit, so -0 gives -π like the CPU's `atan2`.
+    return select(t, -t, (bitcast<u32>(y) >> 31u) == 1u);
 }
 
 // The map's red and green at map texel (x, y), clamped to the map.
@@ -350,9 +421,9 @@ fn rem_euclid_f(v: f32, m: f32) -> f32 {
 
 // `distort::sphere_1d`.
 fn sphere_1d(rn: f32, a: f32) -> f32 {
-    var aim = sin(rn * (PI / 2.0));
+    var aim = sin_r(rn * (PI / 2.0));
     if a >= 0.0 {
-        aim = asin(rn) * 2.0 / PI;
+        aim = asin_p(rn) * 2.0 / PI;
     }
     return rn + abs(a) * (aim - rn);
 }
@@ -485,7 +556,7 @@ fn mapped(x: f32, y: f32) -> vec2<f32> {
             if q.e.x != 0u {
                 let dx = px - pcx;
                 let dy = py - pcy;
-                var theta = atan2(-dx, -dy);
+                var theta = atan2_p(-dx, -dy);
                 if theta <= 0.0 {
                     theta += TAU;
                 }
@@ -494,7 +565,7 @@ fn mapped(x: f32, y: f32) -> vec2<f32> {
             } else {
                 let theta = (px + 1.0 - f32(b.x)) / pw * TAU;
                 let r = (py - f32(b.y)) / ph * rmax;
-                s = vec2<f32>(pcx - r * sin(theta), pcy - r * cos(theta));
+                s = vec2<f32>(pcx - r * sin_r(theta), pcy - r * cos_r(theta));
             }
             return s + vec2<f32>(0.5);
         }
@@ -521,9 +592,10 @@ fn mapped(x: f32, y: f32) -> vec2<f32> {
                 radial = a * wave * rr / (8.0 * k);
                 angular = a * wave * PI / (4.0 * k);
             }
-            let th = atan2(dy, dx) + angular;
+            let th = atan2_p(dy, dx) + angular;
             let rs = max(r + radial, 0.0);
-            return vec2<f32>(cx + rs * cos(th), cy + rs * sin(th));
+            let sc = sin_cos(th);
+            return vec2<f32>(cx + rs * sc.y, cy + rs * sc.x);
         }
         default: {
             // Shear: the row's offset.
