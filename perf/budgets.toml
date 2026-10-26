@@ -75,6 +75,17 @@ requires = "crates/ui-egui/examples/layout_bench.rs"
 quick_args = []
 note = "layout PSDs with many styled layers (#125/#128)"
 
+# Photomerge (#7758): the bounded-band algorithm must remain fast and its process-level
+# resident-set high-water mark is tracked (on every desktop OS). No uncalibrated budget is
+# enforced. Full mode uses 4 x 2 MP so ordinary CI machines do not allocate multi-GB blends;
+# use the stand-alone example for the 4 x 24 MP stress test.
+[[bench]]
+name = "bench_multiband"
+package = "photocraft-algo"
+args = ["4", "2", "--reps", "5"]
+quick_args = ["2", "0.25", "--reps", "3"]
+note = "synthetic Photomerge multi-band blend; resident-set peak includes input/output buffers"
+
 # ---- #209: interactive edits on layered documents (20 MP, styled layers) ---------------------
 
 [[scenario]]
@@ -359,7 +370,9 @@ issue = 211
 bench = "perf_scenarios"
 row = "Content-Aware Scale 24 MP to 90 % width"
 budget_ms = 3000
-enforce = false  # over budget in the 2026-10-05 baseline
+enforce = false  # 954 s in the 2026-10-05 baseline, which predates the seam-search proxies. 2026-10-13: the
+# row measured 3.3 s -> 1.6 s on a 4-core VM (CPU) with the kept seam search (docs/seam-carving-performance.md).
+# Flip once a budgeted-class run shows the whole row under 3 s.
 
 [[scenario]]
 id = "P29"
@@ -613,6 +626,32 @@ enforce = false  # 2.8 s measured 2026-10-22
 
 [[scenario]]
 id = "P68"
+title = "Photomerge multi-band blend, synthetic"
+issue = 7758
+bench = "bench_multiband"
+row = "Photomerge multiband blend"
+target = "track timing and peak RSS; no calibrated performance budget"
+
+[[scenario]]
+id = "P69"
+title = "Filter dialog preview publish at k 1, 36 MP (display + texels)"
+issue = 5772
+bench = "interactive_bench"
+row = "filter preview publish, k 1 (display + texels)"
+budget_ms = 16
+enforce = false  # 64 ms measured 2026-10-24 (worst step, RTX 4090 Laptop): the whole result is converted
+
+[[scenario]]
+id = "P70"
+title = "Filter dialog preview window texture at k 1, 36 MP"
+issue = 5772
+bench = "interactive_bench"
+row = "filter preview window texture, k 1"
+budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 3.2 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
+
+[[scenario]]
+id = "P71"
 title = "Filter dialog preview canvas upload at k 1, 36 MP, 1920x1080 view (display + texels)"
 issue = 5772
 bench = "interactive_bench"
@@ -621,16 +660,7 @@ budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 5.1 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
-id = "P69"
-title = "Filter dialog preview window texture at k 1, 36 MP"
-issue = 5772
-bench = "interactive_bench"
-row = "filter preview window texture, k 1"
-budget_ms = 16
-enforce = false  # met on an RTX 4090 Laptop (worst step 1.8 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
-
-[[scenario]]
-id = "P70"
+id = "P72"
 title = "Gaussian Blur dialog slider step r 40, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -639,7 +669,7 @@ budget_ms = 16
 enforce = false  # 37 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
 
 [[scenario]]
-id = "P71"
+id = "P73"
 title = "Gaussian Blur dialog slider step r 250, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -648,7 +678,7 @@ budget_ms = 16
 enforce = false  # 26 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
 
 [[scenario]]
-id = "P72"
+id = "P74"
 title = "Gaussian Blur dialog slider step r 40, GPU resident, zoomed out (proxy), 36 MP"
 issue = 5772
 bench = "interactive_bench"
@@ -657,7 +687,7 @@ budget_ms = 16
 enforce = false  # 74 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
 
 [[scenario]]
-id = "P73"
+id = "P75"
 title = "Gaussian Blur dialog slider step r 250, GPU resident, zoomed out (proxy), 36 MP"
 issue = 5772
 bench = "interactive_bench"
@@ -666,7 +696,7 @@ budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 4.6 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
-id = "P74"
+id = "P76"
 title = "Unsharp Mask dialog slider step r 4, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -675,7 +705,7 @@ budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 4.0 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
-id = "P75"
+id = "P77"
 title = "Unsharp Mask dialog slider step r 40, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
