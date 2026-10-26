@@ -147,7 +147,7 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
             rotation: 0.0,
             shadow: false,
             pixel_grid: false,
-            view_key: egui::Id::new(("filter-preview-window", dialog)).value(),
+            view_key: egui::Id::unique(("filter-preview-window", dialog)).value(),
             offset: [0.0, 0.0],
             ..params
         };
