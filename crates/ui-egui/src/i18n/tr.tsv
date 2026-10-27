@@ -629,6 +629,10 @@
 	Fit Layer(s) on Screen	Katmanları Ekrana Sığdır
 	Fit Artboard on Screen	Çalışma Yüzeyini Ekrana Sığdır
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	Print Size	Baskı Boyutu
 	Pixel Aspect Ratio	Piksel En Boy Oranı
@@ -2152,6 +2156,10 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Seçim yapılabilecek yol yok: Kalem aracıyla bir yol çizin veya Yollar panelinden birini seçin.
 	Cancel opening	Açılışı iptal et
 	Cancelled opening {name}	{name} açılışı iptal edildi
+	Damaged Photoshop document	Hasarlı Photoshop belgesi
+	The document “{name}” may be damaged.	“{name}” belgesi hasarlı olabilir.
+	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Bazı katmanlar, pikseller veya maskeler okunamadı. Açmaya devam etmek istiyor musunuz?
+	If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original.	Devam ederseniz, orijinalin üzerine kaydetmek okunamayan verileri kalıcı olarak silebilir. Orijinali korumak için bir kopya kaydedin.
 	The document “{name}” does not have an embedded {mode} profile.	'{name}' belgesinde gömülü bir {mode} profili yok.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	“{name}” belgesinin gömülü renk profili geçerli {mode} çalışma renk uzayıyla eşleşmiyor.
 	Working: {working}	Çalışma renk uzayı: {working}
@@ -2704,6 +2712,9 @@ cameraRaw	Color	Renk
 	Color indicates	Renk şunu gösterir:
 	Create Snapshot	Anlık Görüntü Oluştur
 	Delete Snapshot	Anlık Görüntüyü Sil
+	From:	Kaynak:
+	Full Document	Tam Belge
+	Merged Layers	Birleştirilmiş Katmanlar
 	New Snapshot	Yeni Anlık Görüntü
 	New Snapshot…	Yeni Anlık Görüntü…
 	History Options…	Geçmiş Seçenekleri…
@@ -3826,6 +3837,8 @@ cameraData	Lens	Lens
 	Draw to modify the curve	Eğriyi değiştirmek için çiz
 	Edit points to modify the curve	Eğriyi değiştirmek için noktaları düzenle
 	Fix the red plane first: its corners must form a convex quad	Önce kırmızı düzlemi düzeltin: köşeleri dışbükey bir dörtgen oluşturmalı
+	Alt-click a plane to set the clone source	Klon kaynağını ayarlamak için bir düzleme Alt+tıklayın
+	Too many clone strokes: apply Vanishing Point first	Çok fazla klon darbesi: önce Kaybolma Noktası'nı uygulayın
 	Grid Size:	Izgara Boyutu:
 	Light Blue	Açık Mavi
 	Light Gray	Açık Gri
@@ -3941,6 +3954,17 @@ cameraData	Lens	Lens
 	Color Indicates:	Rengin Gösterdiği:
 	Ink Characteristics	Mürekkep Özellikleri
 	Solidity:	Doluluk:
+	Calibration	Kalibrasyon
+	Red Primary	Kırmızı ana renk
+	Green Primary	Yeşil ana renk
+	Blue Primary	Mavi ana renk
+	Write xmp sidecars	XMP yan dosyalarını yaz
+	Set the tone sliders from the image	Ton kaydırıcılarını görüntüden ayarla
+	Settings from {name}	{name} ayarları
+	Settings from {name}; {count} not supported: {names}	{name} ayarları; {count} desteklenmiyor: {names}
+	Could not write {name}: {error}	{name} yazılamadı: {error}
+	Kept {name}: written by another application	{name} korundu: başka bir uygulama tarafından yazılmış
+	Shadow Tint	Gölge tonu
 	Redrawing	Yeniden çiziliyor
 # Bevel & Emboss shading controls.
 	Highlight Mode	Vurgu Modu
@@ -3949,6 +3973,18 @@ cameraData	Lens	Lens
 	Shadow Mode	Gölge Modu
 	Shadow Color	Gölge Rengi
 	Shadow Opacity	Gölge Opaklığı
+	Check for Updates…	Güncellemeleri Denetle…
+	PhotoCraft Updates	PhotoCraft Güncellemeleri
+	Checking for updates…	Güncellemeler denetleniyor…
+	Open the release page to choose an installer for your system.	Sisteminize uygun yükleyiciyi seçmek için sürüm sayfasını açın.
+	Open Download Page	İndirme Sayfasını Aç
+	PhotoCraft is up to date.	PhotoCraft güncel.
+	Could not check for updates.	Güncellemeler denetlenemedi.
+	Updates have not been checked yet.	Güncellemeler henüz denetlenmedi.
+	Check Again	Yeniden Denetle
+	Automatically Check for Updates	Güncellemeleri Otomatik Denetle
+	Installed version: {version}	Yüklü sürüm: {version}
+	PhotoCraft {version} is available.	PhotoCraft {version} kullanılabilir.
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Gömülü profili kullanın ({profile})
 	Convert to the working space ({profile})	Çalışma alanına dönüştürün ({profile})
@@ -4093,6 +4129,14 @@ cameraData	Lens	Lens
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU bağdaştırıcısı
+
+# Styles panel: Import / Export Styles (.asl)
+@plural	Imported {n} style from {file}|Imported {n} styles from {file}	{file} dosyasından {n} stil içe aktarıldı
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	{n} stil {file} dosyasına dışa aktarıldı
+	Import Styles…	Stilleri İçe Aktar…
+	Export Selected Styles…	Seçili Stilleri Dışa Aktar…
+	Export Styles…	Stilleri Dışa Aktar…
+	{file} is not a style library (.asl)	{file} bir stil kitaplığı değil (.asl)
 # Actions: a step dialog holds a suspended recording (#7365)
 	Confirm or cancel the open action step dialog first	Önce açık eylem adımı iletişim kutusunu onaylayın veya iptal edin
 	Pro Medium Gray	Pro Orta Gri
@@ -4101,14 +4145,38 @@ cameraData	Lens	Lens
 	Pro Light Gray	Pro Açık Gri
 	Pro Light	Pro Açık
 	Resize Windows to Fit	Pencereleri sığacak şekilde boyutlandır
-
 	EXR	EXR
-
 # Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	Otomatik paragraf yönü
 	Left-to-right paragraph direction	Soldan sağa paragraf yönü
 	Right-to-left paragraph direction	Sağdan sola paragraf yönü
 	Not rendered: this adjustment ({key}) is kept as imported.	Görüntülenmiyor: bu ayarlama ({key}) içe aktarıldığı gibi korunuyor.
-
 # Print preview image (#8236)
 	Print preview image	Baskı Önizleme Görüntüsü
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+	Hue Cube	Renk Tonu Küpü
+	Brightness Cube	Parlaklık Küpü
+	Color Wheel	Renk Çarkı
+	RGB Sliders	RGB Kaydırıcıları
+	HSB Sliders	HSB Kaydırıcıları
+	CMYK Sliders	CMYK Kaydırıcıları
+	Lab Sliders	Lab Kaydırıcıları
+	Web Color Sliders	Web Rengi Kaydırıcıları
+	Copy Color as HTML	Rengi HTML Olarak Kopyala
+	Copy Color's Hex Code	Rengin Onaltılık Kodunu Kopyala
+	RGB Spectrum	RGB Spektrumu
+	CMYK Spectrum	CMYK Spektrumu
+	Grayscale Ramp	Gri Tonlama Şeridi
+	Current Colors	Geçerli Renkler
+	Make Ramp Web Safe	Şeridi Web Renkleriyle Sınırla
+# Art History Brush (#213).
+	Art History Brush Tool	Sanat Tarihi Fırçası Aracı
+	Tight Short	Sıkı Kısa
+	Tight Medium	Sıkı Orta
+	Tight Long	Sıkı Uzun
+	Loose Medium	Gevşek Orta
+	Loose Long	Gevşek Uzun
+	Dab	Benek
+	Tight Curl	Sıkı Kıvrım
+	Loose Curl	Gevşek Kıvrım
+	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler
