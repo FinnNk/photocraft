@@ -899,6 +899,36 @@ fn masked_adjustment_changes_only_its_mask_area() {
     assert_eq!(change_bounds_in(&open, 1, None, canvas, SampleType::F32), None);
 }
 
+/// #6533 review: a pass-through group with a knockout and Transparency Shapes Layer off knocks
+/// out the whole layer, not just what its masked adjustments touch, so hiding it isn't bounded by
+/// their masks; nor is one with Blend If set.
+#[test]
+fn masked_adjustment_in_a_knockout_group_is_not_mask_bounded() {
+    let canvas = Rect::new(0, 0, 10, 8);
+    let painted = Rect::new(2, 1, 5, 4);
+    let mut adj = Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert));
+    let mut m = LayerMask::hide_all();
+    m.surface.fill_rect(painted, &[1.0]);
+    adj.mask = Some(m);
+    let mut d = doc_f32(10, 8);
+    d.layers.push(solid_layer("under", canvas, [0.3, 0.55, 0.7, 1.0]));
+    let mut g = Layer::group("g", vec![adj]);
+    g.blend = BlendMode::PassThrough;
+    d.layers.push(g);
+    assert_eq!(change_bounds_in(&d.layers, 2, None, canvas, SampleType::F32), Some(painted), "plain: bounded");
+    let mut knockout = d.layers.clone();
+    knockout[2].advanced.knockout = photocraft_doc::Knockout::Shallow;
+    knockout[2].advanced.transparency_shapes = false;
+    assert_eq!(change_bounds_in(&knockout, 2, None, canvas, SampleType::F32), None);
+    let mut kd = d.clone();
+    kd.layers = knockout;
+    let changed = toggled_pixels(&kd, canvas, |d| d.layers[2].visible = false);
+    assert!(!painted.contains_rect(&changed), "the knockout changes pixels off the mask: {changed:?}");
+    let mut blend_if = d.layers.clone();
+    blend_if[2].blend_if.ranges = vec![[photocraft_doc::BlendRange { black: [50, 50], white: [255, 255] }, photocraft_doc::BlendRange::FULL]];
+    assert_eq!(change_bounds_in(&blend_if, 2, None, canvas, SampleType::F32), None);
+}
+
 /// #6533 review: a pass-through group below 100 % opacity mixes everything it renders with the
 /// backdrop, so hiding the group isn't bounded by its adjustments' masks; toggling a masked
 /// adjustment inside it still is (the mix is the same off the mask either way), compared exactly.

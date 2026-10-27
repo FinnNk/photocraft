@@ -439,8 +439,13 @@ fn masked_change_bounds(layers: &[Layer], k: usize, outer: Option<(&[Layer], usi
     // clipped one changes its base's pixels under its mask, so its mask bounds it too. A
     // pass-through group that mixes its result with the backdrop (below 100 % opacity or fill, a
     // mask, effects) recomputes every pixel it renders, which rounds even where nothing in it
-    // drew, so showing or hiding it isn't bounded.
+    // drew, so showing or hiding it isn't bounded. Nor is a layer with Advanced Blending or
+    // Blend If set: a knockout with Transparency Shapes Layer off covers the whole layer, beyond
+    // its masks and what its children draw.
     fn reach(l: &Layer, canvas: Rect, depth: usize) -> Option<Rect> {
+        if !l.advanced.is_default() || !l.blend_if.is_default() {
+            return None;
+        }
         match &l.content {
             LayerContent::Adjustment(_) => mask_reach(l, canvas),
             LayerContent::Group(_)
