@@ -323,3 +323,46 @@ fn cmyk_typed_into_the_picker_is_the_fills_colour_in_a_cmyk_document() {
     confirm(&mut app, &f).unwrap();
     assert_eq!(fill(&app).c, rich);
 }
+
+/// #8568: in a CMYK document the picker previews the inks typed, as OK stores them, including
+/// inks that share the fill's display colour; and a new fill's picker opens with the inks the
+/// foreground was picked as, so OK keeps them.
+#[test]
+fn cmyk_picker_previews_the_typed_inks_and_seeds_the_foregrounds() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("image.mode.cmyk", json!({})).unwrap();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    let hex = |inks: [f32; 4]| {
+        let [r, g, b] = photocraft_color::convert::cmyk_to_rgb(inks).map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+        format!("#{r:02x}{g:02x}{b:02x}")
+    };
+    let rich = [0.5, 0.5, 0.5, 1.0];
+    app.session.execute("tools.setColors", json!({"foreground": hex(rich), "foregroundCmyk": rich})).unwrap();
+    let id = open_new(&mut app).unwrap();
+    let f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    assert_eq!(color_picker_ui::picked_cmyk(&f), Some(rich), "seeded with the foreground's inks");
+    app.ui.dialogs.retain(|d| d.id != id);
+    confirm_new(&mut app, &f).unwrap();
+    let st = app.session.active().unwrap();
+    let layer = st.active_layer.unwrap();
+    let LayerContent::Fill(Fill::Solid(original)) = st.doc.layer(layer).unwrap().content else { panic!("not a solid fill") };
+    assert_eq!(original.c, rich);
+
+    // Inks with the same display colour preview as those inks: in the thumbnail and the canvas.
+    let near = [0.5, 0.5, 0.499, 1.0];
+    let id = open(&mut app).unwrap();
+    let d = app.ui.dialogs.iter_mut().find(|d| d.id == id).unwrap();
+    d.fields.insert("__cmyk".into(), json!(near));
+    assert_eq!(d.fields.get("color"), d.fields.get("__orig"), "both inks show as the same colour");
+    let doc = app.session.active().unwrap().doc.id;
+    let want = Color { mode: ColorMode::Cmyk, c: near, alpha: 1.0 };
+    assert_eq!(thumbnail_color(&app, doc, layer, original), want);
+    let (shown, _) = display_doc(&mut app, 0).expect("a preview");
+    assert_eq!(app.solid_fill_preview.as_ref().unwrap().color, want);
+    drop(shown);
+    // The original inks again: no preview.
+    app.ui.dialogs.iter_mut().find(|d| d.id == id).unwrap().fields.insert("__cmyk".into(), json!(rich));
+    assert_eq!(thumbnail_color(&app, doc, layer, original), original);
+    assert!(display_doc(&mut app, 0).is_none());
+}

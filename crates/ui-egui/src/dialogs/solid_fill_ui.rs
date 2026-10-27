@@ -42,13 +42,16 @@ pub(crate) fn open(app: &mut PhotocraftApp) -> Option<u64> {
 pub(crate) fn open_new(app: &mut PhotocraftApp) -> Option<u64> {
     let document = app.session.active()?.doc.id.0;
     let foreground = app.session.tools.foreground;
-    Some(color_picker_ui::open_for_command(
-        app,
-        "Color Picker (Solid Color)",
-        [foreground[0], foreground[1], foreground[2]],
-        "layer.newFillLayer.solidColor",
-        json!({"document": document}),
-    ))
+    let rgb = [foreground[0], foreground[1], foreground[2]];
+    let id = color_picker_ui::open_for_command(app, "Color Picker (Solid Color)", rgb, "layer.newFillLayer.solidColor", json!({"document": document}));
+    // A foreground picked as CMYK opens showing those inks, as its own picker does, so OK keeps
+    // them even when the foreground is finer than the picker's hex (#8568).
+    if let Some(cmyk) = app.session.tools.picked_cmyk(rgb)
+        && let Some(d) = app.ui.dialog_mut(id)
+    {
+        d.fields.insert("__cmyk".into(), json!(cmyk));
+    }
+    Some(id)
 }
 
 /// A creation picker is distinct from the editor opened by a fill layer's thumbnail.
@@ -80,12 +83,30 @@ pub(crate) fn thumbnail_color(app: &PhotocraftApp, document: DocId, layer: Layer
         .filter(|d| owns(&d.fields))
         .find_map(|d| {
             let params = d.fields.get("__params")?;
-            if params.get("document")?.as_u64()? != document.0 || params.get("layer")?.as_u64()? != layer.0 || d.fields.get("color") == d.fields.get("__orig") {
+            if params.get("document")?.as_u64()? != document.0 || params.get("layer")?.as_u64()? != layer.0 {
                 return None;
             }
-            cmds::color_param(d.fields.get("color")?, original, app.session.documents().iter().find(|st| st.doc.id == document)?.doc.mode).ok()
+            picked_color(&d.fields, original, app.session.documents().iter().find(|st| st.doc.id == document)?.doc.mode)
         })
         .unwrap_or(original)
+}
+
+/// The colour the picker `f` previews for a fill of colour `original` in a document of colour
+/// mode `mode`, or `None` while it shows the fill unchanged. In a CMYK document that is the inks
+/// picked, as OK stores them, so inks that share the original's display colour still preview
+/// (#8568).
+fn picked_color(f: &Map<String, Value>, original: Color, mode: photocraft_color::ColorMode) -> Option<Color> {
+    use photocraft_color::ColorMode::Cmyk;
+    let inks = color_picker_ui::picked_cmyk(f).filter(|_| mode == Cmyk);
+    let same_inks = inks.is_none_or(|k| original.mode != Cmyk || original.c == k);
+    if f.get("color") == f.get("__orig") && same_inks {
+        return None;
+    }
+    let color = cmds::color_param(f.get("color")?, original, mode).ok()?;
+    Some(match inks {
+        Some(c) => Color { mode: Cmyk, c, alpha: color.alpha },
+        None => color,
+    })
 }
 
 /// No-op OK preserves imported high-precision / non-RGB colour values rather than quantising
@@ -124,12 +145,12 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     };
     let st = app.session.documents().get(idx)?;
     let params = d.fields.get("__params")?;
-    if params.get("document")?.as_u64()? != st.doc.id.0 || d.fields.get("color") == d.fields.get("__orig") {
+    if params.get("document")?.as_u64()? != st.doc.id.0 {
         return None;
     }
     let layer = LayerId(params.get("layer")?.as_u64()?);
     let LayerContent::Fill(Fill::Solid(original)) = st.doc.layer(layer)?.content else { return None };
-    let color = cmds::color_param(d.fields.get("color")?, original, st.doc.mode).ok()?;
+    let color = picked_color(&d.fields, original, st.doc.mode)?;
     if let Some(p) = &app.solid_fill_preview
         && p.document == st.doc.id
         && p.revision == st.revision
