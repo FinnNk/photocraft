@@ -968,6 +968,70 @@ fn background_job_scenarios(b: &mut Bench, sz: &Sizes) {
     if b.wanted(frame) {
         frame_scenario(b, frame, w, h);
     }
+    let full = "app frame: full CPU refresh of a 24 MP document";
+    if b.wanted(full) {
+        full_refresh_frame_scenario(b, full, w, h);
+    }
+}
+
+/// #9328: the whole app (kittest harness, CPU canvas) with a 24 MP document; each sample toggles
+/// a layer's visibility and steps one frame, and every frame recomposites all 24 MP on the CPU.
+/// Always 10 samples, whatever `--reps` says.
+///
+/// The stack is the photo plus three full-canvas copies in blend modes, and the top copy toggles.
+/// Toggling the photo's only layer (the first version) measured 3.4 ms: with it hidden no layer
+/// is visible, so the reduced composite's one-colour shortcut (`compose::uniform`) draws the whole
+/// canvas as one pixel. Here the photo stays visible in every frame, its noisy tiles are never one
+/// colour, and the toggled layer's damage is the whole canvas. Each frame checks that the canvas
+/// refresh it recorded was a CPU one covering the whole document (within the reduction's rounding).
+fn full_refresh_frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
+    let mut s = match open_photo(w, h) {
+        Ok(s) => s,
+        Err(e) => return b.errors.push((name.into(), e)),
+    };
+    let built = (|| -> Res<u64> {
+        let photo = active_layer(&s)?;
+        for (blend, opacity) in [("Multiply", 0.7), ("Screen", 0.5), ("Overlay", 0.6)] {
+            exec(&mut s, "layer.duplicate", json!({"layer": photo}))?;
+            let copy = active_layer(&s)?;
+            if copy == photo {
+                return Err("layer.duplicate did not select the copy".into());
+            }
+            exec(&mut s, "layer.setProps", json!({"layer": copy, "blend": blend, "opacity": opacity}))?;
+        }
+        active_layer(&s)
+    })();
+    let top = match built {
+        Ok(l) => l,
+        Err(e) => return b.errors.push((name.into(), e)),
+    };
+    let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |cc| {
+        photocraft_ui_egui::PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        photocraft_ui_egui::PhotocraftApp::new(s, photocraft_ui_egui::Services::default())
+    });
+    harness.run_steps(6);
+    b.current = Some(name.to_string());
+    b.sampler.reset();
+    let mut samples = Vec::new();
+    let pixels = u64::from(w) * u64::from(h);
+    let run = (|| -> Res<()> {
+        for i in 0..10 {
+            harness.state_mut().run("layer.setProps", json!({"layer": top, "visible": i % 2 == 1}))?;
+            harness.state_mut().perf.last_refresh_px = 0;
+            let t = Instant::now();
+            harness.step();
+            samples.push(ms(t));
+            // A damage refresh counts its reduced texels times the factor squared, which can fall
+            // a few rows and columns short of the document when the factor doesn't divide it.
+            let perf = &harness.state().perf;
+            if !matches!(perf.last_refresh, "full" | "rect") || perf.last_refresh_px.saturating_mul(100) < pixels.saturating_mul(95) {
+                return Err(format!("frame {i} refreshed {} px ({}), not the whole {pixels} px on the CPU", perf.last_refresh_px, perf.last_refresh));
+            }
+        }
+        Ok(())
+    })();
+    let st = std::mem::take(&mut harness.state_mut().session);
+    b.record(name, &st, &samples, run);
 }
 
 /// The whole app (kittest harness, CPU canvas) with a 24 MP document: frame times while a
