@@ -456,7 +456,11 @@ mod tests {
         h.run_steps(3);
         let widths = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
             let doc = h.state().session.active().unwrap().doc.clone();
-            layers.iter().map(|id| doc.layer(*id).unwrap().clone()).map(|l| h.state_mut().layer_frame_bounds(&l, l.surface().unwrap()).width()).collect::<Vec<_>>()
+            layers
+                .iter()
+                .map(|id| doc.layer(*id).unwrap().clone())
+                .map(|l| h.state_mut().layer_frame_bounds(&l, l.surface().unwrap()).width())
+                .collect::<Vec<_>>()
         };
         assert_eq!(widths(&mut h), vec![100, 40]);
         let at = h.get_by_label("Width").rect().center();
