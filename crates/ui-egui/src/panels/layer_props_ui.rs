@@ -46,6 +46,10 @@ fn edit_tolerance(layer: &Layer, u: LenUnit, extent: f64) -> f32 {
     }
 }
 
+/// How long (seconds) past its gesture's end a wheeled value may wait to be applied: a field
+/// drawn again later than this drops it.
+const WHEEL_STALE: f64 = 1.0;
+
 /// A number field that reports a value once committed (drag released, Enter, focus lost). `label` is its own
 /// label and the one stacked with it in the same column ("W" over "X"), which share a centre.
 /// `id` names the field and the layer it edits.
@@ -57,17 +61,20 @@ fn field(ui: &mut egui::Ui, id: (&str, u64), label: (&str, &str), name: &str, cu
     let (id, layer) = id;
     stacked_label(ui, tl!(label.0), &[tl!(label.0), tl!(label.1)], LABEL_W, 2.0);
     let key = ui.make_persistent_id(("layer-props-field", id));
-    // A wheeled value waiting for its gesture to end is its layer's: another layer made active
-    // in the meantime drops it rather than receive it.
+    // A wheeled value waiting for its gesture to end is its layer's, held since it was last drawn.
+    // It is dropped rather than applied when another layer was made active in the meantime, or
+    // when the field went undrawn well past the gesture's end (the section collapsed, a layer
+    // without these fields shown): applied later it would be a stale edit.
     let wheel_key = key.with("wheel");
-    let pending = ui.data(|d| d.get_temp::<u64>(wheel_key));
-    if pending.is_some_and(|l| l != layer) {
+    let now = ui.input(|i| i.time);
+    let held = ui.data(|d| d.get_temp::<(u64, f64)>(wheel_key));
+    let pending = held.is_some_and(|(l, at)| l == layer && now - at <= crate::field_wheel::GESTURE_GAP + WHEEL_STALE);
+    if held.is_some() && !pending {
         ui.data_mut(|d| {
-            d.remove::<u64>(wheel_key);
+            d.remove::<(u64, f64)>(wheel_key);
             d.remove::<f32>(key);
         });
     }
-    let pending = pending.filter(|l| *l == layer).is_some();
     let mut v = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or_else(|| u.shown(f64::from(current), extent));
     let resp = widgets::value_field(ui, &mut v, -300_000.0..=300_000.0, u.unit.suffix(), width).accessible_name(tl!(name));
     // The wheel over the field is held like a drag: each notch applied as its own edit resampled
@@ -76,7 +83,7 @@ fn field(ui: &mut egui::Ui, id: (&str, u64), label: (&str, &str), name: &str, cu
     if wheeled && !resp.dragged() && !resp.has_focus() && crate::field_wheel::field_gesture_running(ui.ctx()) {
         ui.data_mut(|d| {
             d.insert_temp(key, v);
-            d.insert_temp(wheel_key, layer);
+            d.insert_temp(wheel_key, (layer, now));
         });
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::field_wheel::GESTURE_GAP));
         return None;
@@ -85,7 +92,7 @@ fn field(ui: &mut egui::Ui, id: (&str, u64), label: (&str, &str), name: &str, cu
         ui.data_mut(|d| d.insert_temp(key, v));
         return None;
     }
-    let wheel_ended = ui.data_mut(|d| d.remove_temp::<u64>(wheel_key)).is_some();
+    let wheel_ended = ui.data_mut(|d| d.remove_temp::<(u64, f64)>(wheel_key)).is_some();
     ui.data_mut(|d| d.remove::<f32>(key));
     if !(resp.drag_stopped() || resp.lost_focus() || resp.changed() || wheel_ended) {
         return None;
@@ -482,6 +489,57 @@ mod tests {
         h.state_mut().run("layer.select", json!({"layer": layers[0].0})).unwrap();
         h.run_steps(12);
         assert_eq!(widths(&mut h), vec![100, 40], "the dropped width came back on its own layer");
+    }
+
+    /// A wheeled width whose field stops being drawn before the gesture ends (Transform
+    /// collapsed) is dropped, not applied as a stale edit when the field shows again.
+    #[test]
+    fn a_wheeled_width_left_undrawn_is_dropped() {
+        use egui_kittest::kittest::Queryable;
+        let hide = egui::Id::unique("test-hide-layer-props");
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("select.rect", json!({"x": 10, "y": 10, "width": 100, "height": 60})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(280.0, 900.0)).with_step_dt(0.05).build_ui_state(
+            move |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                    return;
+                }
+                crate::field_wheel::begin_frame(ui.ctx());
+                if ui.data(|d| d.get_temp::<bool>(hide)).unwrap_or(false) {
+                    return;
+                }
+                let state = app.session.active().unwrap();
+                let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
+                properties(app, ui, &layer);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let history = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+        let before = history(&h);
+        let at = h.get_by_label("Width").rect().center();
+        h.hover_at(at);
+        h.run_steps(1);
+        for _ in 0..3 {
+            h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Line,
+                delta: vec2(0.0, 1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run_steps(1);
+        }
+        h.ctx.data_mut(|d| d.insert_temp(hide, true));
+        h.run_steps(40);
+        h.ctx.data_mut(|d| d.insert_temp(hide, false));
+        h.run_steps(12);
+        assert_eq!(history(&h), before, "the stale wheeled width was applied when the field showed again");
     }
 
     #[test]
