@@ -752,8 +752,29 @@ bench = "perf_scenarios"
 row = "zoomed-out reduced composite of the huge document with one painted layer"
 enforce = false  # tracked only
 
+# ---- #9329: redraw area of edits on full-canvas layers (track only) ---------------------------
+#
+# Each row checks it hits the path it claims (a full-canvas layer; a non-empty edit; a small
+# selection) and prints `refresh px <p50>` after its timing line.
+
 [[scenario]]
-id = "P80"
+id = "P81"
+title = "Undo a brush dab on a full-canvas 16-bit 15000 x 10000 layer + refresh"
+issue = 9329
+bench = "perf_scenarios"
+row = "undo a brush dab on a full-canvas 16-bit 15000x10000 layer + refresh"
+enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P82"
+title = "Fill a 2 % selection on a full-canvas 24 MP layer + refresh"
+issue = 9329
+bench = "perf_scenarios"
+row = "fill a 2 % selection on a full-canvas 24 MP layer + refresh"
+enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P83"
 title = "Filter dialog preview canvas upload at k 1, 36 MP, 1920x1080 view (display + texels)"
 issue = 5772
 bench = "interactive_bench"
@@ -762,7 +783,7 @@ budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 5.1 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
-id = "P81"
+id = "P84"
 title = "Filter dialog preview window texture at k 1, 36 MP"
 issue = 5772
 bench = "interactive_bench"
@@ -771,7 +792,7 @@ budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 3.2 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
-id = "P82"
+id = "P85"
 title = "Gaussian Blur dialog slider step r 40, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -780,7 +801,7 @@ budget_ms = 16
 enforce = false  # 37 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
 
 [[scenario]]
-id = "P83"
+id = "P86"
 title = "Gaussian Blur dialog slider step r 250, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -789,7 +810,7 @@ budget_ms = 16
 enforce = false  # 26 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
 
 [[scenario]]
-id = "P84"
+id = "P87"
 title = "Gaussian Blur dialog slider step r 40, GPU resident, zoomed out (proxy), 36 MP"
 issue = 5772
 bench = "interactive_bench"
@@ -798,7 +819,7 @@ budget_ms = 16
 enforce = false  # 74 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
 
 [[scenario]]
-id = "P85"
+id = "P88"
 title = "Gaussian Blur dialog slider step r 250, GPU resident, zoomed out (proxy), 36 MP"
 issue = 5772
 bench = "interactive_bench"
@@ -807,7 +828,7 @@ budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 4.6 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
-id = "P86"
+id = "P89"
 title = "Unsharp Mask dialog slider step r 4, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -816,7 +837,7 @@ budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 4.0 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
-id = "P87"
+id = "P90"
 title = "Unsharp Mask dialog slider step r 40, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -825,7 +846,7 @@ budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 9.3 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
-id = "P88"
+id = "P91"
 title = "Minimum r 10 (square) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -834,7 +855,7 @@ budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 5.7 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
-id = "P89"
+id = "P92"
 title = "Maximum r 10 (round) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -843,7 +864,7 @@ budget_ms = 16
 enforce = false  # 18 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
 
 [[scenario]]
-id = "P90"
+id = "P93"
 title = "Custom (Blur More's kernel) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -852,7 +873,7 @@ budget_ms = 16
 enforce = false  # 19 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
 
 [[scenario]]
-id = "P91"
+id = "P94"
 title = "Maximum r 40 (round) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -861,7 +882,7 @@ budget_ms = 16
 enforce = false  # 44 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
 
 [[scenario]]
-id = "P92"
+id = "P95"
 title = "Maximum r 100 (round) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -870,7 +891,7 @@ budget_ms = 16
 enforce = false  # 93 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
 
 [[scenario]]
-id = "P93"
+id = "P96"
 title = "Displace 10 % dialog slider step (map stretched, Wrap Around), GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -879,7 +900,7 @@ budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 5.6 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
-id = "P94"
+id = "P97"
 title = "Twirl 120° dialog slider step, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
@@ -888,7 +909,7 @@ budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 5.9 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
 
 [[scenario]]
-id = "P95"
+id = "P98"
 title = "Wave (5 generators) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
 issue = 5772
 bench = "interactive_bench"
