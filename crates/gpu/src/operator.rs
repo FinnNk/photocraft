@@ -1168,6 +1168,12 @@ pub(crate) fn scratch_count(blur: &SeparableBlur) -> usize {
     if matches!(blur, SeparableBlur::Disc { half_widths, .. } if !half_widths.is_empty()) { 4 } else { 2 }
 }
 
+/// The scratch textures' size for passes over a `size` window: Lens Blur's prefix sums are one
+/// column wider than the window.
+pub(crate) fn scratch_size(blur: &SeparableBlur, size: [u32; 2]) -> [u32; 2] {
+    if matches!(blur, SeparableBlur::Lens(_)) { [size[0] + 1, size[1]] } else { size }
+}
+
 /// Minimum or Maximum over a disc in `half_widths.len() / 2 + 1` steps: step `h` holds the
 /// horizontal extreme over `2h + 1` texels (`H_0` is the source, `H_{h+1}[x]` the extreme of
 /// `H_h[x - 1]` and `H_h[x + 1]`, and of `H_0[x]` too for `h = 0`) and folds in the disc's rows
