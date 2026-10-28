@@ -1,7 +1,7 @@
 use super::damage::layer_bounds;
 use super::moves::{move_layers, with_links};
 use super::selection::{selected, top_level};
-use super::*;
+use super::{Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, Session, Value, bad, json};
 
 /// The bounds Align and Distribute move by, in a document of bounds `canvas`: [`layer_bounds`],
 /// except that a shape layer is measured over everything it draws, beyond the canvas too (its
