@@ -102,6 +102,10 @@ struct Bench {
     errors: Vec<(String, String)>,
     /// The row being timed, so a panic inside it is reported against that row.
     current: Option<String>,
+    /// Pixels the last `refresh` redrew (`Refresh.px`; the rect's area on the CPU).
+    last_px: std::cell::Cell<u64>,
+    /// Refreshed pixels per sample, for rows that report them (#9329); `record` prints the p50.
+    px: std::cell::RefCell<Vec<u64>>,
 }
 
 impl Bench {
@@ -138,11 +142,12 @@ impl Bench {
         let t = Instant::now();
         match &self.gpu {
             Some((g, rs)) => {
-                g.refresh(doc.id.0, doc, damage, None);
+                self.last_px.set(g.refresh(doc.id.0, doc, damage, None).px);
                 let _ = rs.device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: None });
             }
             None => {
                 let r = damage.unwrap_or(doc.bounds()).intersect(&doc.bounds());
+                self.last_px.set(if r.is_empty() { 0 } else { r.size().area() });
                 if !r.is_empty() {
                     std::hint::black_box(photocraft_compose::render(doc, r));
                 }
@@ -190,10 +195,13 @@ impl Bench {
         }
         self.current = Some(name.to_string());
         self.sampler.reset();
+        self.px.borrow_mut().clear();
         let mut samples = Vec::new();
         let mut run = || -> Res<()> {
             if warm {
                 f(self, s, 0)?;
+                // `refresh px` describes only the timed runs.
+                self.px.borrow_mut().clear();
             }
             for i in 0..reps.max(1) {
                 samples.push(f(self, s, i + 1)?);
@@ -216,6 +224,11 @@ impl Bench {
                     samples.len(),
                     r["peak_rss_bytes"].as_u64().unwrap_or(0) >> 20,
                 );
+                let mut px = std::mem::take(&mut *self.px.borrow_mut());
+                if !px.is_empty() {
+                    px.sort_unstable();
+                    println!("{name:<52} refresh px {}", px[px.len() / 2]);
+                }
                 self.rows.push(r);
             }
             Err(e) => {
@@ -368,6 +381,8 @@ fn main() {
         rows: Vec::new(),
         errors: Vec::new(),
         current: None,
+        last_px: std::cell::Cell::new(0),
+        px: std::cell::RefCell::new(Vec::new()),
     };
     println!("perf_scenarios: {} mode, {} reps, {}", if quick { "quick" } else { "full" }, reps, adapter.as_deref().unwrap_or("CPU canvas"));
     let t_all = Instant::now();
@@ -375,7 +390,7 @@ fn main() {
     // A panic in one group (a crash the scenario found) is reported against the row that was
     // running, and the other groups still run.
     type Group = fn(&mut Bench, &Sizes);
-    let groups: [(&str, Group); 7] = [
+    let groups: [(&str, Group); 8] = [
         ("layered", layered_scenarios),
         ("many layers", many_layer_scenarios),
         ("full-canvas layers", full_canvas_layer_scenarios),
@@ -383,6 +398,7 @@ fn main() {
         ("long operations", job_scenarios),
         ("algorithms", algorithm_scenarios),
         ("huge document", huge_document_scenarios),
+        ("redraw area", redraw_area_scenarios),
     ];
     let use_gpu = b.gpu.is_some();
     if let Some(wanted) = arg(&args, "--group")
@@ -1198,4 +1214,100 @@ fn liquify_preview_scenario(b: &mut Bench) {
         println!("  existing 1600 px proxy update p50 {median:.2} ms (lower-resolution output)");
     }
     b.record(name, &Session::new(), &samples, Ok(()));
+}
+
+/// The share of the canvas `r` covers.
+fn coverage(doc: &photocraft_doc::Document, r: Rect) -> f64 {
+    r.intersect(&doc.bounds()).size().area() as f64 / doc.bounds().size().area().max(1) as f64
+}
+
+/// The content bounds of `layer`'s pixels.
+fn layer_bounds(s: &Session, layer: u64) -> Res<Rect> {
+    let doc = &s.active().ok_or("no document")?.doc;
+    doc.layer(photocraft_doc::LayerId(layer)).and_then(|l| l.surface()).map(|p| p.content_bounds()).ok_or_else(|| "layer has no pixels".to_string())
+}
+
+/// A document with one painted layer covering the whole canvas; returns it and the layer.
+fn full_layer_doc(w: u32, h: u32, depth: u32) -> Res<(Session, u64)> {
+    let mut s = Session::new();
+    exec(&mut s, "file.new", json!({"width": w, "height": h, "depth": depth, "background": "white"}))?;
+    exec(&mut s, "layer.new.layer", json!({"name": "full"}))?;
+    exec(&mut s, "edit.fill", json!({"color": "#6080a0"}))?;
+    let layer = active_layer(&s)?;
+    let doc = s.active().ok_or("no document")?.doc.clone();
+    let cover = coverage(&doc, layer_bounds(&s, layer)?);
+    if cover < 0.95 {
+        return Err(format!("path check: the painted layer covers {:.1} % of the canvas, not >= 95 %", cover * 100.0));
+    }
+    Ok((s, layer))
+}
+
+/// #9329 PR A: the redraw area of edits on a full-canvas layer, where redrawing the whole
+/// document is the expensive cliff. Each row checks it hits that path and prints `refresh px`.
+fn redraw_area_scenarios(b: &mut Bench, sz: &Sizes) {
+    let undo = "undo a brush dab on a full-canvas 16-bit 15000x10000 layer + refresh";
+    if b.wanted(undo) {
+        b.current = Some(undo.to_string());
+        let (w, h) = sz.huge16;
+        match full_layer_doc(w, h, 16) {
+            Err(e) => b.errors.push((undo.to_string(), e)),
+            Ok((mut s, _)) => {
+                let _ = b.refresh(&s, true);
+                // Two 1.2 GB layers and, before the fix, a 150 MP refresh per sample.
+                let reps = b.reps.min(5);
+                b.time(undo, &mut s, reps, true, |b, s, i| {
+                    let (x, y) = (200 + (i as u32 * 97) % (w - 400), 200 + (i as u32 * 61) % (h - 400));
+                    exec(s, "paint.stroke", json!({"points": [[x, y]], "size": 60, "hardness": 0.8, "color": "#c03020"}))?;
+                    b.refresh(s, false)?;
+                    let before = s.active().ok_or("no document")?.doc.clone();
+                    let t = Instant::now();
+                    exec(s, "edit.undo", json!({}))?;
+                    let took = ms(t) + b.refresh(s, false)?;
+                    b.px.borrow_mut().push(b.last_px.get());
+                    let after = s.active().ok_or("no document")?.doc.clone();
+                    if photocraft_engine::layer_multi_cmds::step_damage(&before, &after).is_some_and(|r| r.is_empty()) {
+                        return Err("path check: the undo changed no pixels".into());
+                    }
+                    Ok(took)
+                });
+            }
+        }
+    }
+
+    let fill = "fill a 2 % selection on a full-canvas 24 MP layer + refresh";
+    if b.wanted(fill) {
+        b.current = Some(fill.to_string());
+        let (w, h) = sz.big_photo;
+        let built = full_layer_doc(w, h, 8).and_then(|(mut s, layer)| {
+            exec(&mut s, "select.rect", json!({"x": w / 3, "y": h / 3, "width": w / 8, "height": h / 8}))?;
+            let doc = s.active().ok_or("no document")?.doc.clone();
+            let sel = doc.selection.as_ref().map(|m| m.content_bounds()).ok_or("no selection")?;
+            let share = coverage(&doc, sel);
+            if share > 0.02 {
+                return Err(format!("path check: the selection covers {:.2} % of the canvas, not <= 2 %", share * 100.0));
+            }
+            Ok((s, layer))
+        });
+        match built {
+            Err(e) => b.errors.push((fill.to_string(), e)),
+            Ok((mut s, _)) => {
+                let _ = b.refresh(&s, true);
+                let reps = b.reps;
+                b.time(fill, &mut s, reps, true, |b, s, i| {
+                    // The colour alternates, so every sample changes pixels.
+                    let color = if i % 2 == 0 { "#20c040" } else { "#c02040" };
+                    let before = s.active().ok_or("no document")?.doc.clone();
+                    let t = Instant::now();
+                    exec(s, "edit.fill", json!({"color": color}))?;
+                    let took = ms(t) + b.refresh(s, false)?;
+                    b.px.borrow_mut().push(b.last_px.get());
+                    let after = s.active().ok_or("no document")?.doc.clone();
+                    if photocraft_engine::layer_multi_cmds::step_damage(&before, &after).is_some_and(|r| r.is_empty()) {
+                        return Err("path check: the fill changed no pixels".into());
+                    }
+                    Ok(took)
+                });
+            }
+        }
+    }
 }
