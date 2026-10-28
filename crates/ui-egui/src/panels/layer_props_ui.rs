@@ -542,6 +542,90 @@ mod tests {
         assert_eq!(history(&h), before, "the stale wheeled width was applied when the field showed again");
     }
 
+    /// Moving straight from wheeling W to wheeling H is still W's gesture: W's value lands as
+    /// soon as the wheel turns off it, and H doesn't step until a gesture of its own, so the
+    /// two never apply from the same original box together.
+    #[test]
+    fn wheeling_width_then_height_applies_each_once() {
+        use egui_kittest::kittest::Queryable;
+        let setup = || {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.run("select.rect", json!({"x": 10, "y": 10, "width": 100, "height": 50})).unwrap();
+            app.run("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+            app.run("select.deselect", json!({})).unwrap();
+            app
+        };
+        let app = setup();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(280.0, 900.0)).with_step_dt(0.05).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                    return;
+                }
+                crate::field_wheel::begin_frame(ui.ctx());
+                let state = app.session.active().unwrap();
+                let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
+                properties(app, ui, &layer);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let history = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+        let size = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
+            let st = h.state().session.active().unwrap();
+            let layer = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+            let r = h.state_mut().layer_frame_bounds(&layer, layer.surface().unwrap());
+            (r.width(), r.height())
+        };
+        let before = history(&h);
+        let notch = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
+            h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Line,
+                delta: vec2(0.0, 1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run_steps(1);
+        };
+        let (w_at, h_at) = (h.get_by_label("Width").rect().center(), h.get_by_label("Height").rect().center());
+        // What W's four notches alone make, applied the same way on a copy of the document.
+        let w_only = {
+            let mut app = setup();
+            let st = app.session.active().unwrap();
+            let layer = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+            let bb = frame(&layer, app.layer_frame_bounds(&layer, layer.surface().unwrap()));
+            let p = transform_params(layer.id.0, bb, Some((bb[2] - bb[0]) as f32 + 4.0), None, true, 0.5).unwrap();
+            app.run("edit.transform", p).unwrap();
+            let st = app.session.active().unwrap();
+            let layer = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+            let r = app.layer_frame_bounds(&layer, layer.surface().unwrap());
+            (r.width(), r.height())
+        };
+        h.hover_at(w_at);
+        h.run_steps(1);
+        for _ in 0..4 {
+            notch(&mut h);
+        }
+        h.hover_at(h_at);
+        h.run_steps(1);
+        for _ in 0..4 {
+            notch(&mut h);
+        }
+        h.run_steps(20);
+        assert_eq!(history(&h), before + 1, "W applied once, H not stepped by W's gesture");
+        assert_eq!(size(&mut h), w_only, "W's four notches, linked, and nothing from H");
+        // A new gesture over H is H's own.
+        for _ in 0..2 {
+            notch(&mut h);
+        }
+        h.run_steps(20);
+        assert_eq!(history(&h), before + 2);
+        assert!(size(&mut h).1 > w_only.1);
+    }
+
     #[test]
     fn transform_fields_show_and_take_the_ruler_unit() {
         use photocraft_engine::prefs::Unit;
