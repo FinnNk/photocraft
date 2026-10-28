@@ -752,6 +752,15 @@ bench = "perf_scenarios"
 row = "zoomed-out reduced composite of the huge document with one painted layer"
 enforce = false  # tracked only
 
+[[scenario]]
+id = "P80"
+title = "App frame: full CPU refresh of a 24 MP document"
+issue = 9328
+bench = "perf_scenarios"
+row = "app frame: full CPU refresh of a 24 MP document"
+budget_ms = 50
+enforce = false  # track only: the worst case for the slow-frame ring (#9328 PR B)
+
 # ---- #9329: redraw area of edits on full-canvas layers (track only) ---------------------------
 #
 # Each row checks it hits the path it claims (a full-canvas layer; a non-empty edit; a small
