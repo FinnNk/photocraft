@@ -57,12 +57,25 @@ fn field(ui: &mut egui::Ui, id: &str, label: (&str, &str), name: &str, current: 
     let key = ui.make_persistent_id(("layer-props-field", id));
     let mut v = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or_else(|| u.shown(f64::from(current), extent));
     let resp = widgets::value_field(ui, &mut v, -300_000.0..=300_000.0, u.unit.suffix(), width).accessible_name(tl!(name));
+    // The wheel over the field is held like a drag: each notch applied as its own edit resampled
+    // the layer again from the last result, and a fast scroll destroyed it (#9898).
+    let wheel_key = key.with("wheel");
+    let wheeled = resp.changed() || ui.data(|d| d.get_temp::<bool>(wheel_key)).is_some();
+    if wheeled && !resp.dragged() && !resp.has_focus() && crate::field_wheel::field_gesture_running(ui.ctx()) {
+        ui.data_mut(|d| {
+            d.insert_temp(key, v);
+            d.insert_temp(wheel_key, true);
+        });
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::field_wheel::GESTURE_GAP));
+        return None;
+    }
     if resp.dragged() || resp.has_focus() {
         ui.data_mut(|d| d.insert_temp(key, v));
         return None;
     }
+    let wheel_ended = ui.data_mut(|d| d.remove_temp::<bool>(wheel_key)).is_some();
     ui.data_mut(|d| d.remove::<f32>(key));
-    if !(resp.drag_stopped() || resp.lost_focus() || resp.changed()) {
+    if !(resp.drag_stopped() || resp.lost_focus() || resp.changed() || wheel_ended) {
         return None;
     }
     let px = u.px(v, extent) as f32;
@@ -343,6 +356,60 @@ mod tests {
         let at = |l: &str| centres.iter().find(|(s, _)| s == l).map(|(_, x)| *x).unwrap_or_else(|| panic!("no {l} label in {centres:?}"));
         assert!((at("W") - at("X")).abs() < 0.01, "W and X: {centres:?}");
         assert!((at("H") - at("Y")).abs() < 0.01, "H and Y: {centres:?}");
+    }
+
+    /// #9898: wheeling over W applied each notch as its own Free Transform, resampling the layer
+    /// again from the last result until a fast scroll destroyed it. A wheel gesture is one edit,
+    /// applied when it stops, from the pixels it started with.
+    #[test]
+    fn wheeling_the_width_is_one_transform_when_the_wheel_stops() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("select.rect", json!({"x": 10, "y": 10, "width": 100, "height": 60})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(280.0, 900.0)).with_step_dt(0.05).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                    return;
+                }
+                crate::field_wheel::begin_frame(ui.ctx());
+                let state = app.session.active().unwrap();
+                let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
+                properties(app, ui, &layer);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let history = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+        let width = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
+            let st = h.state().session.active().unwrap();
+            let layer = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+            h.state_mut().layer_frame_bounds(&layer, layer.surface().unwrap()).width()
+        };
+        let before = history(&h);
+        assert_eq!(width(&mut h), 100);
+        let at = h.get_by_label("Width").rect().center();
+        h.hover_at(at);
+        h.run_steps(1);
+        for _ in 0..8 {
+            h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Line,
+                delta: vec2(0.0, 1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run_steps(1);
+        }
+        assert_eq!(history(&h), before, "nothing applied while the wheel turns");
+        assert_eq!(width(&mut h), 100);
+        h.run_steps(12);
+        assert_eq!(history(&h), before + 1, "one edit for the whole gesture");
+        assert_eq!(width(&mut h), 108);
     }
 
     #[test]
