@@ -4,7 +4,9 @@ use super::convert::{convert_tile, convert_tiles, keep_overlap, put_tiles, words
 use super::kit::{Bound, FrameRes, texture_group, uniform_group};
 use super::paging::{OVER_BUDGET, cell_rect};
 use super::textures::{CachedPattern, Cell, ChunkOut, ResKey, Resident, ResidentRef, Stats, Tex, TexKind};
-use super::*;
+use super::{
+    Arc, Compositor, DocId, HashMap, I, Kernel, LayerOperator, OperatorTarget, Pattern, Plan, Rect, Role, Surface, TILE_SIZE, Tile, TileCoord, operator, plan,
+};
 
 impl Compositor {
     /// Bring the pages of `cell` that `plan` samples up to date and resolve its effect maps.
