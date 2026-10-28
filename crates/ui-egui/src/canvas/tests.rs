@@ -175,15 +175,15 @@ fn inline_filter_preview_is_composited_and_recorded_once() {
     app.background_jobs = false;
     app.run("file.new", json!({"width": 320, "height": 240})).unwrap();
     crate::filter_dialog::open(&mut app, "filter.stylize.solarize").unwrap();
-    app.perf.frame_refresh_ms = 0.0;
+    app.perf.stage = Default::default();
     let (_, _, size) = ensure_filter_preview(&mut app, 0, &egui::Context::default()).expect("a preview");
     assert_eq!(size, [320, 240]);
     assert_eq!(app.perf.last_refresh, "filter-preview");
     assert_eq!(app.perf.last_refresh_px, 320 * 240);
-    assert_eq!(app.perf.frame_refresh_ms, app.perf.composite_ms + app.perf.upload_ms, "one record per preview");
+    assert_eq!(app.perf.stage.composite_ms + app.perf.stage.upload_ms, app.perf.composite_ms + app.perf.upload_ms, "one record per preview");
     // Unchanged request: nothing is recomputed or recorded again.
     ensure_filter_preview(&mut app, 0, &egui::Context::default()).expect("the same preview");
-    assert_eq!(app.perf.frame_refresh_ms, app.perf.composite_ms + app.perf.upload_ms);
+    assert_eq!(app.perf.stage.composite_ms + app.perf.stage.upload_ms, app.perf.composite_ms + app.perf.upload_ms);
 }
 
 /// #6326: a filter's live preview is never coarser than the screen. On a document big enough
