@@ -4,7 +4,10 @@ use super::convert::{convert_tile, convert_tiles, keep_overlap, put_tiles, words
 use super::kit::{Bound, FrameRes, texture_group, uniform_group};
 use super::paging::{OVER_BUDGET, cell_rect};
 use super::textures::{CachedPattern, Cell, ChunkOut, ResKey, Resident, ResidentRef, Stats, Tex, TexKind, WHOLE};
-use super::*;
+use super::{
+    Arc, Compositor, DocId, HashMap, I, Kernel, LayerOperator, OperatorTarget, Pattern, Plan, Rect, Role, SeparableBlur, Surface, TILE_SIZE, Tile, TileCoord,
+    operator, plan,
+};
 
 /// The 1×1 map a remap other than Displace binds.
 static MAP_STAND_IN: std::sync::LazyLock<Arc<Vec<[f32; 4]>>> = std::sync::LazyLock::new(|| Arc::new(vec![[0.0; 4]]));
