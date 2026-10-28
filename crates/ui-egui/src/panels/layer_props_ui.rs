@@ -48,23 +48,35 @@ fn edit_tolerance(layer: &Layer, u: LenUnit, extent: f64) -> f32 {
 
 /// A number field that reports a value once committed (drag released, Enter, focus lost). `label` is its own
 /// label and the one stacked with it in the same column ("W" over "X"), which share a centre.
+/// `id` names the field and the layer it edits.
 /// `len` is the unit shown and its 100% extent (for percent); `name` is the field's accessible name.
 // The explicit accessible name accompanies the existing numeric-field parameters.
 #[expect(clippy::too_many_arguments)]
-fn field(ui: &mut egui::Ui, id: &str, label: (&str, &str), name: &str, current: f32, width: f32, len: (LenUnit, f64), tol: f32) -> Option<f32> {
+fn field(ui: &mut egui::Ui, id: (&str, u64), label: (&str, &str), name: &str, current: f32, width: f32, len: (LenUnit, f64), tol: f32) -> Option<f32> {
     let (u, extent) = len;
+    let (id, layer) = id;
     stacked_label(ui, tl!(label.0), &[tl!(label.0), tl!(label.1)], LABEL_W, 2.0);
     let key = ui.make_persistent_id(("layer-props-field", id));
+    // A wheeled value waiting for its gesture to end is its layer's: another layer made active
+    // in the meantime drops it rather than receive it.
+    let wheel_key = key.with("wheel");
+    let pending = ui.data(|d| d.get_temp::<u64>(wheel_key));
+    if pending.is_some_and(|l| l != layer) {
+        ui.data_mut(|d| {
+            d.remove::<u64>(wheel_key);
+            d.remove::<f32>(key);
+        });
+    }
+    let pending = pending.filter(|l| *l == layer).is_some();
     let mut v = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or_else(|| u.shown(f64::from(current), extent));
     let resp = widgets::value_field(ui, &mut v, -300_000.0..=300_000.0, u.unit.suffix(), width).accessible_name(tl!(name));
     // The wheel over the field is held like a drag: each notch applied as its own edit resampled
     // the layer again from the last result, and a fast scroll destroyed it (#9898).
-    let wheel_key = key.with("wheel");
-    let wheeled = resp.changed() || ui.data(|d| d.get_temp::<bool>(wheel_key)).is_some();
+    let wheeled = resp.changed() || pending;
     if wheeled && !resp.dragged() && !resp.has_focus() && crate::field_wheel::field_gesture_running(ui.ctx()) {
         ui.data_mut(|d| {
             d.insert_temp(key, v);
-            d.insert_temp(wheel_key, true);
+            d.insert_temp(wheel_key, layer);
         });
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::field_wheel::GESTURE_GAP));
         return None;
@@ -73,7 +85,7 @@ fn field(ui: &mut egui::Ui, id: &str, label: (&str, &str), name: &str, current: 
         ui.data_mut(|d| d.insert_temp(key, v));
         return None;
     }
-    let wheel_ended = ui.data_mut(|d| d.remove_temp::<bool>(wheel_key)).is_some();
+    let wheel_ended = ui.data_mut(|d| d.remove_temp::<u64>(wheel_key)).is_some();
     ui.data_mut(|d| d.remove::<f32>(key));
     if !(resp.drag_stopped() || resp.lost_focus() || resp.changed() || wheel_ended) {
         return None;
@@ -177,24 +189,24 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "w", ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw), tw) {
+                if let Some(v) = field(ui, ("w", layer.id.0), ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw), tw) {
                     run.extend(transform_params(layer.id.0, bb, Some(v), None, linked, tw).map(|p| ("edit.transform".to_string(), p)));
                 }
                 if crate::icons::button(ui, if linked { "link" } else { "unlink" }, LINK_W, linked, tl!("Link width and height")).clicked() {
                     ui.data_mut(|d| d.insert_temp(link_key, !linked));
                 }
-                if let Some(v) = field(ui, "h", ("H", "Y"), "Height", (bb[3] - bb[1]) as f32, w, (u, dh), th) {
+                if let Some(v) = field(ui, ("h", layer.id.0), ("H", "Y"), "Height", (bb[3] - bb[1]) as f32, w, (u, dh), th) {
                     run.extend(transform_params(layer.id.0, bb, None, Some(v), linked, th).map(|p| ("edit.transform".to_string(), p)));
                 }
             });
             ui.add_space(ROW_GAP);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "x", ("X", "W"), "X", bb[0] as f32, w, (u, dw), 0.5) {
+                if let Some(v) = field(ui, ("x", layer.id.0), ("X", "W"), "X", bb[0] as f32, w, (u, dw), 0.5) {
                     run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - bb[0] as f32).round() as i32, "dy": 0})));
                 }
                 ui.add_space(LINK_W + LABEL_GAP);
-                if let Some(v) = field(ui, "y", ("Y", "H"), "Y", bb[1] as f32, w, (u, dh), 0.5) {
+                if let Some(v) = field(ui, ("y", layer.id.0), ("Y", "H"), "Y", bb[1] as f32, w, (u, dh), 0.5) {
                     run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": 0, "dy": (v - bb[1] as f32).round() as i32})));
                 }
             });
@@ -410,6 +422,62 @@ mod tests {
         h.run_steps(12);
         assert_eq!(history(&h), before + 1, "one edit for the whole gesture");
         assert_eq!(width(&mut h), 108);
+    }
+
+    /// A wheeled width still waiting for its gesture to end is dropped, not applied to another
+    /// layer made active in the meantime (or to its own when it is made active again).
+    #[test]
+    fn a_wheeled_width_is_not_applied_to_another_layer() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
+        let mut layers = Vec::new();
+        for (x, w) in [(10, 100), (120, 40)] {
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.run("select.rect", json!({"x": x, "y": 10, "width": w, "height": 40})).unwrap();
+            app.run("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+            app.run("select.deselect", json!({})).unwrap();
+            layers.push(app.session.active().unwrap().active_layer.unwrap());
+        }
+        app.run("layer.select", json!({"layer": layers[0].0})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(280.0, 900.0)).with_step_dt(0.05).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                    return;
+                }
+                crate::field_wheel::begin_frame(ui.ctx());
+                let state = app.session.active().unwrap();
+                let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
+                properties(app, ui, &layer);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let widths = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
+            let doc = h.state().session.active().unwrap().doc.clone();
+            layers.iter().map(|id| doc.layer(*id).unwrap().clone()).map(|l| h.state_mut().layer_frame_bounds(&l, l.surface().unwrap()).width()).collect::<Vec<_>>()
+        };
+        assert_eq!(widths(&mut h), vec![100, 40]);
+        let at = h.get_by_label("Width").rect().center();
+        h.hover_at(at);
+        h.run_steps(1);
+        for _ in 0..3 {
+            h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Line,
+                delta: vec2(0.0, 1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run_steps(1);
+        }
+        h.state_mut().run("layer.select", json!({"layer": layers[1].0})).unwrap();
+        h.run_steps(12);
+        assert_eq!(widths(&mut h), vec![100, 40], "the other layer took the first one's wheeled width");
+        h.state_mut().run("layer.select", json!({"layer": layers[0].0})).unwrap();
+        h.run_steps(12);
+        assert_eq!(widths(&mut h), vec![100, 40], "the dropped width came back on its own layer");
     }
 
     #[test]
