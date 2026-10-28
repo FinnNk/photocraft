@@ -6,7 +6,7 @@ use super::paging::{
     OVER_BUDGET, cell_rect, first_error, grid_rect_count, grid_rects, group_depth, lru_victims, operator_fingerprints, scoped_work, uniform_buffer_len,
 };
 use super::textures::{ChunkOut, FxKey, ResKey, Resident, Stats};
-use super::*;
+use super::{Compositor, Document, LayerId, LayerOperator, OperatorTarget, Plan, Rect, Role, Surface, Unsupported, plan, timing};
 
 impl Compositor {
     /// Composite `region` of `doc`. Each finished chunk is passed to `sink` while its encoder is

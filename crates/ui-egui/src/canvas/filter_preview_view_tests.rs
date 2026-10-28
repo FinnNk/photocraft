@@ -1,6 +1,7 @@
 //! A 100 % filter preview uploads only what the view shows, and pans add the rest (#5772).
 
 use super::*;
+use photocraft_geom::Rect as DRect;
 use serde_json::json;
 
 fn render_state() -> Option<eframe::egui_wgpu::RenderState> {
