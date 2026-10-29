@@ -202,9 +202,10 @@ pub struct LiquifyDialog {
 }
 
 /// The selection a Liquify preview is shown through, as the engine applies it on OK
-/// (`distort_cmds::mix_by_selection`): the result over the original by its coverage.
+/// (`distort_cmds::mix_by_selection`): the result over the original by its coverage. On a smart
+/// object with a filter mask it is that mask, which the engine shows every filter through.
 struct PreviewSelection {
-    surface: Surface,
+    mask: photocraft_doc::LayerMask,
     /// Coverage at each proxy pixel (row-major, the proxy's size).
     proxy: Vec<f32>,
 }
@@ -212,17 +213,17 @@ struct PreviewSelection {
 impl PreviewSelection {
     /// `sel` with its coverage sampled at `proxy`'s pixels. Kept even when every proxy pixel is
     /// selected: a gap narrower than a proxy pixel still shows in the source-resolution crop.
-    fn new(sel: Surface, proxy: &ProxyImage) -> Self {
+    fn new(mask: photocraft_doc::LayerMask, proxy: &ProxyImage) -> Self {
         let (bx, by, s) = (f64::from(proxy.bounds.x0), f64::from(proxy.bounds.y0), proxy.scale);
         let mut cov = Vec::with_capacity(proxy.w * proxy.h);
         for y in 0..proxy.h {
             let dy = (by + (y as f64 + 0.5) * s).floor() as i32;
             for x in 0..proxy.w {
                 let dx = (bx + (x as f64 + 0.5) * s).floor() as i32;
-                cov.push(sel.sample_channel(dx, dy, 0).clamp(0.0, 1.0));
+                cov.push(mask.value(dx, dy).clamp(0.0, 1.0));
             }
         }
-        PreviewSelection { surface: sel, proxy: cov }
+        PreviewSelection { mask, proxy: cov }
     }
 }
 
@@ -433,7 +434,7 @@ impl LiquifyDialog {
         for y in dirty.y0..dirty.y1 {
             self.source.read_rgba_into(Rect::new(dirty.x0, y, dirty.x1, y + 1), &mut old);
             for x in dirty.x0..dirty.x1 {
-                let c = sel.surface.sample_channel(x, y, 0).clamp(0.0, 1.0);
+                let c = sel.mask.value(x, y).clamp(0.0, 1.0);
                 if c >= 1.0 {
                     continue;
                 }
@@ -605,8 +606,19 @@ fn open_on(
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
     let out = vec![[0u8; 4]; proxy.w * proxy.h];
-    // A smart filter being edited keeps its own filter mask; a new Liquify goes through the selection.
-    let selection = st.doc.selection.clone().filter(|_| smart_filter.is_none()).map(|sel| PreviewSelection::new(sel, &proxy));
+    // A smart object's filter mask shows every filter through it, a new Liquify too, whatever is
+    // selected (`smart_cmds::add_smart_filter`). Otherwise a new Liquify goes through the selection;
+    // a smart filter being edited has none.
+    let filter_mask = match st.doc.layer(layer).map(|l| &l.content) {
+        Some(photocraft_doc::LayerContent::Smart(sm)) => sm.filter_mask.clone(),
+        _ => None,
+    };
+    let selection = filter_mask
+        .or_else(|| {
+            let sel = st.doc.selection.clone().filter(|_| smart_filter.is_none())?;
+            Some(photocraft_doc::LayerMask { surface: sel, ..photocraft_doc::LayerMask::reveal_all() })
+        })
+        .map(|mask| PreviewSelection::new(mask, &proxy));
     let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
     let mut d = LiquifyDialog {
         document: st.doc.id,
