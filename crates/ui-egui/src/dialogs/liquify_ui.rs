@@ -196,6 +196,38 @@ pub struct LiquifyDialog {
     pub preview_ms: f64,
     /// The smart filter being edited: OK updates it instead of adding a new Liquify filter.
     smart_filter: Option<usize>,
+    /// The document's selection when the dialog opened, which OK applies Liquify through: the
+    /// preview mixes the same way (#9541). `None` without one, or when it selects everything.
+    selection: Option<PreviewSelection>,
+}
+
+/// The selection a Liquify preview is shown through, as the engine applies it on OK
+/// (`distort_cmds::mix_by_selection`): the result over the original by its coverage.
+struct PreviewSelection {
+    surface: Surface,
+    /// Coverage at each proxy pixel (row-major, the proxy's size).
+    proxy: Vec<f32>,
+}
+
+impl PreviewSelection {
+    /// `sel` sampled at `proxy`'s pixels, or `None` when it selects every one of them.
+    fn new(sel: Surface, proxy: &ProxyImage) -> Option<Self> {
+        let (bx, by, s) = (f64::from(proxy.bounds.x0), f64::from(proxy.bounds.y0), proxy.scale);
+        let mut cov = Vec::with_capacity(proxy.w * proxy.h);
+        for y in 0..proxy.h {
+            let dy = (by + (y as f64 + 0.5) * s).floor() as i32;
+            for x in 0..proxy.w {
+                let dx = (bx + (x as f64 + 0.5) * s).floor() as i32;
+                cov.push(sel.sample_channel(dx, dy, 0).clamp(0.0, 1.0));
+            }
+        }
+        cov.iter().any(|c| *c < 1.0).then_some(PreviewSelection { surface: sel, proxy: cov })
+    }
+}
+
+/// `new` over `old` (premultiplied RGBA8) by coverage `c`.
+fn mix(new: [u8; 4], old: [f32; 4], c: f32) -> [u8; 4] {
+    std::array::from_fn(|k| (f32::from(new[k]) * c + old[k].clamp(0.0, 1.0) * 255.0 * (1.0 - c) + 0.5).clamp(0.0, 255.0) as u8)
 }
 
 fn union(a: Option<[usize; 4]>, b: [usize; 4]) -> Option<[usize; 4]> {
@@ -369,7 +401,48 @@ impl LiquifyDialog {
     /// Re-renders the dirty proxy pixels into `out` (the texture upload happens in `show`).
     fn render_dirty(&mut self) {
         if let Some(r) = self.dirty {
-            self.proxy.render(&self.field, r, &mut self.out);
+            self.render_proxy(r);
+        }
+    }
+
+    /// Renders proxy pixels `r` through the field, then through the selection.
+    fn render_proxy(&mut self, r: [usize; 4]) {
+        self.proxy.render(&self.field, r, &mut self.out);
+        let Some(sel) = &self.selection else { return };
+        let w = self.proxy.w;
+        for y in r[1]..r[3].min(self.proxy.h) {
+            for x in r[0]..r[2].min(w) {
+                let i = y * w + x;
+                if let (Some(c), Some(old), Some(new)) = (sel.proxy.get(i), self.proxy.px.get(i), self.out.get_mut(i))
+                    && *c < 1.0
+                {
+                    *new = mix(*new, *old, *c);
+                }
+            }
+        }
+    }
+
+    /// Mixes the source-resolution preview's `dirty` pixels (document px, within `bounds`) over
+    /// the original by the selection.
+    fn select_view(&mut self, bounds: Rect, dirty: Rect) {
+        let Some(sel) = &self.selection else { return };
+        let (w, dw) = (bounds.width() as usize, dirty.width() as usize);
+        let mut old = vec![[0.0f32; 4]; dw * dirty.height() as usize];
+        self.source.read_rgba_into(dirty, &mut old);
+        for y in dirty.y0..dirty.y1 {
+            for x in dirty.x0..dirty.x1 {
+                let c = sel.surface.sample_channel(x, y, 0).clamp(0.0, 1.0);
+                if c >= 1.0 {
+                    continue;
+                }
+                let at = ((y - bounds.y0) as usize) * w + (x - bounds.x0) as usize;
+                let from = ((y - dirty.y0) as usize) * dw + (x - dirty.x0) as usize;
+                if let (Some(new), Some(o)) = (self.view_out.get_mut(at), old.get(from)) {
+                    // Straight to premultiplied, as the preview's pixels are.
+                    let o = [o[0] * o[3], o[1] * o[3], o[2] * o[3], o[3]];
+                    *new = mix(*new, o, c);
+                }
+            }
         }
     }
 
@@ -426,6 +499,7 @@ impl LiquifyDialog {
             self.preview_ms = crate::gpu_canvas::now_ms() - started;
             return;
         }
+        self.select_view(bounds, dirty);
         let x0 = (dirty.x0 - bounds.x0) as usize;
         let y0 = (dirty.y0 - bounds.y0) as usize;
         let x1 = (dirty.x1 - bounds.x0) as usize;
@@ -458,7 +532,7 @@ impl LiquifyDialog {
         let (w, h) = (self.proxy.w, self.proxy.h);
         match (&mut self.tex, self.dirty.take()) {
             (None, _) => {
-                self.proxy.render(&self.field, [0, 0, w, h], &mut self.out);
+                self.render_proxy([0, 0, w, h]);
                 let img = egui::ColorImage::new([w, h], self.out.iter().map(|p| Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3])).collect());
                 self.tex = Some(ctx.load_texture("liquify-proxy", img, egui::TextureOptions::LINEAR));
             }
@@ -530,6 +604,8 @@ fn open_on(
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
     let out = vec![[0u8; 4]; proxy.w * proxy.h];
+    // A smart filter being edited keeps its own filter mask; a new Liquify goes through the selection.
+    let selection = st.doc.selection.clone().filter(|_| smart_filter.is_none()).and_then(|sel| PreviewSelection::new(sel, &proxy));
     let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
     let mut d = LiquifyDialog {
         document: st.doc.id,
@@ -564,6 +640,7 @@ fn open_on(
         dab_ms: 0.0,
         preview_ms: 0.0,
         smart_filter,
+        selection,
     };
     // A sensible starting brush (about a tenth of the image), then the settings last used, so
     // Liquify opens as it was left (#418). Saved values are clamped; a bad one is skipped.

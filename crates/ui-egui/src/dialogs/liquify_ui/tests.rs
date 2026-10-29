@@ -837,3 +837,62 @@ fn liquify_that_cannot_be_applied_reports_the_error() {
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
     assert_eq!(r, Err(app.ui.status.clone()));
 }
+
+/// #9541: with a selection, the dialog's preview changed the whole image, though OK applies
+/// Liquify only inside the selection. The preview now shows what OK applies: unselected pixels
+/// stay as they were, in the proxy and in the zoomed source-resolution crop.
+#[test]
+fn the_preview_shows_liquify_only_inside_the_selection() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 60, "height": 80})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    {
+        let d = app.distort.liquify.as_mut().unwrap();
+        d.zoom = 2.0;
+        d.center = [60.0, 40.0];
+        d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(120.0, 80.0)));
+    }
+    let view_before = app.distort.liquify.as_ref().unwrap().view_out.clone();
+    control(&mut app, &json!({"tool": "forwardWarp", "size": 50})).unwrap();
+    for ev in [
+        ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 },
+        ToolEvent::Move { x: 60.0, y: 42.0, pressure: 1.0 },
+        ToolEvent::Move { x: 80.0, y: 40.0, pressure: 1.0 },
+        ToolEvent::Up { x: 80.0, y: 40.0 },
+    ] {
+        pointer(&mut app, ev, egui::Modifiers::NONE);
+    }
+    let d = app.distort.liquify.as_mut().unwrap();
+    assert!(d.field.max_displacement() > 3.0);
+    // The proxy: unselected pixels as the untouched image renders them, selected ones warped.
+    let mut original = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
+    d.proxy.render(&LiquifyField::new(d.canvas, d.cell), [0, 0, d.proxy.w, d.proxy.h], &mut original);
+    let doc_x = |i: usize| d.proxy.bounds.x0 as f64 + ((i % d.proxy.w) as f64 + 0.5) * d.proxy.scale;
+    let (mut outside, mut inside_changed) = (0, 0);
+    for (i, (a, b)) in d.out.iter().zip(&original).enumerate() {
+        if doc_x(i) >= 60.0 {
+            outside += 1;
+            assert_eq!(a, b, "proxy pixel {i} (x {}) is outside the selection", doc_x(i));
+        } else if a != b {
+            inside_changed += 1;
+        }
+    }
+    assert!(outside > 0 && inside_changed > 0, "outside {outside}, changed inside {inside_changed}");
+    // The zoomed crop (document x 30..90): the same.
+    d.view_dirty = d.view_bounds;
+    d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(120.0, 80.0)));
+    let b = d.view_bounds.unwrap();
+    let w = b.width() as usize;
+    let (mut outside, mut inside_changed) = (0, 0);
+    for (i, (a, before)) in d.view_out.iter().zip(&view_before).enumerate() {
+        let x = b.x0 + (i % w) as i32;
+        if x >= 60 {
+            outside += 1;
+            assert_eq!(a, before, "view pixel at x {x} is outside the selection");
+        } else if a != before {
+            inside_changed += 1;
+        }
+    }
+    assert!(outside > 0 && inside_changed > 0, "view: outside {outside}, changed inside {inside_changed}");
+}
