@@ -460,6 +460,13 @@ fn save_for_web_fits_the_window_and_keeps_its_size() {
             opened.left() >= 0.0 && opened.top() >= 0.0 && opened.right() <= size.x && opened.bottom() <= size.y,
             "{size:?} at {ppp}: the dialog at {opened:?} is off screen"
         );
+        // The whole modal too, its frame and resize grip around the contents.
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size).expand(0.5);
+        let areas: Vec<egui::Rect> = h.ctx.memory(|m| m.areas().visible_layer_ids().into_iter().filter_map(|l| m.area_rect(l.id)).collect());
+        assert!(!areas.is_empty());
+        for r in areas {
+            assert!(screen.contains_rect(r), "{size:?} at {ppp}: an area at {r:?} is off screen");
+        }
         // The growth was a fraction of a point a frame: give it a few hundred.
         h.run_steps(300);
         assert_eq!(frame(&h), opened, "{size:?}: the dialog changed size on its own");
