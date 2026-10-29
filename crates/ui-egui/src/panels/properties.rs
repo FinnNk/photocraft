@@ -326,7 +326,9 @@ mod tests {
                 .find(|n| n.accesskit_node().label().as_deref() == Some(key))
                 .map(|n| n.rect())
                 .unwrap_or_else(|| panic!("no {key} slider"));
-            let (from, to) = (egui::pos2(r.right() - 8.0, r.center().y), egui::pos2(r.left() + r.width() * 0.3, r.center().y));
+            // The press lands away from the current value and the release moves on again, so the
+            // press and release frames change the value as well as the drag.
+            let (from, to) = (egui::pos2(r.left() + r.width() * 0.8, r.center().y), egui::pos2(r.left() + r.width() * 0.35, r.center().y));
             h.hover_at(from);
             h.run_steps(1);
             h.drag_at(from);
@@ -335,7 +337,7 @@ mod tests {
                 h.hover_at(from + (to - from) * (i as f32 / 6.0));
                 h.run_steps(1);
             }
-            h.drop_at(to);
+            h.drop_at(to - egui::vec2(r.width() * 0.05, 0.0));
             h.run_steps(3);
             let v = value(&h);
             assert!(v > 0.15 && v < 0.45, "{key}: the drag was lost on release ({v})");
