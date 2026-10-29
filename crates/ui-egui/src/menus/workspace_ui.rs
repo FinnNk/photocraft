@@ -102,7 +102,10 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         i if i.starts_with(SAVED_PAR) => Some(saved_par(app, i).is_some_and(|c| custom_aspect(c) == app.ui.view.pixel_aspect)),
         "window.panel.modifierKeys" => Some(app.ui.shell.modifier_keys),
         "window.workspace.lockWorkspace" => Some(app.session.prefs().workspace_locked),
-        "view.pixelAspectRatio.custom" => Some(app.ui.view.pixel_aspect.starts_with("custom:")),
+        // A saved ratio in use checks its own item instead (one tick in the submenu).
+        "view.pixelAspectRatio.custom" => Some(
+            app.ui.view.pixel_aspect.starts_with("custom:") && !app.ui.shell.custom_pars.iter().any(|c| custom_aspect(c) == app.ui.view.pixel_aspect),
+        ),
         _ => None,
     }
 }
@@ -754,7 +757,9 @@ mod tests {
         assert_eq!(inv(&mut app, "view.pixelAspectRatio.custom", json!({})).unwrap()["dialog"], "customPar");
         inv(&mut app, "view.pixelAspectRatio.custom", json!({"name": "Cinema", "ratio": 1.25})).unwrap();
         assert_eq!(crate::view_cmds::pixel_aspect_ratio(&app.ui.view.pixel_aspect), 1.25);
-        assert_eq!(checked(&app, "view.pixelAspectRatio.custom"), Some(true));
+        // The saved ratio's own item carries the tick, not the dialog item.
+        assert_eq!(checked(&app, "view.pixelAspectRatio.custom"), Some(false));
+        assert_eq!(checked(&app, &format!("{SAVED_PAR}Cinema")), Some(true));
         assert!(inv(&mut app, "view.pixelAspectRatio.custom", json!({"name": "x", "ratio": 50})).is_err());
         inv(&mut app, "view.pixelAspectRatio.square", json!({})).unwrap();
         inv(&mut app, "view.pixelAspectRatio.custom", json!({"select": "Cinema"})).unwrap();
