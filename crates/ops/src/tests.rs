@@ -197,6 +197,31 @@ fn clear_states_resets_the_brush_source_until_undo() {
     assert_eq!((h.brush_source(), h.row_doc(1, &cur).unwrap().name.as_str()), (Some(1), "a"));
 }
 
+/// The byte budget keeps the source set before Clear History among the cleared states, so
+/// Undo Clear History brings it back as the History Brush's source.
+#[test]
+fn byte_budget_keeps_the_brush_source_of_the_cleared_states() {
+    let mut h = History::new(50);
+    let mut cur = Arc::new(base());
+    for i in 0..5 {
+        edit(&mut h, &mut cur, &format!("paint {i}"), |d| {
+            let id = d.layers[0].id;
+            d.layer_mut(id).unwrap().surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 8.0, 0.0, 0.0, 1.0]);
+        });
+    }
+    assert!(h.set_brush_source(1));
+    let source = h.state(1).unwrap();
+    assert!(h.clear_states());
+    h.max_bytes = 1;
+    assert_eq!(h.trim(&cur), 3);
+    assert_counter(&h, &cur);
+    assert!(h.is_cleared() && h.past_len() == 0, "the list stays cleared");
+    cur = h.undo(cur).unwrap().0;
+    assert_eq!(h.entries(), ["paint 0", "paint 3", "paint 4"], "the source is kept with the last step");
+    assert_eq!(h.brush_source(), Some(0));
+    assert!(Arc::ptr_eq(&h.row_doc(0, &cur).unwrap(), &source), "the History Brush paints from the same state");
+}
+
 #[test]
 fn new_edit_clears_redo() {
     let mut h = History::default();

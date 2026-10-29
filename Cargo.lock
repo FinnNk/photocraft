@@ -5023,6 +5023,7 @@ dependencies = [
 name = "photocraft-algo"
 version = "0.17.0"
 dependencies = [
+ "criterion",
  "photocraft-color",
  "photocraft-geom",
  "photocraft-raster",

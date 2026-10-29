@@ -585,10 +585,10 @@ impl History {
     /// beyond it unseen (#4530). The most recent state is still always kept.
     pub fn trim_with(&mut self, current: &Document, pinned: &[&Document]) -> usize {
         // While Clear History can be undone, the cleared states are what history holds: the
-        // oldest of them go first, as the list's would.
-        let (undo, redo) = match &mut self.cleared {
-            Some(c) => (&mut c.undo, &c.redo),
-            None => (&mut self.undo, &self.redo),
+        // oldest of them go first, as the list's would. The source set before it stays pinned.
+        let (undo, redo, brush_source) = match &mut self.cleared {
+            Some(c) => (&mut c.undo, &c.redo, c.brush_source),
+            None => (&mut self.undo, &self.redo, self.brush_source),
         };
         if self.max_bytes == 0 || undo.len() <= 1 {
             return 0;
@@ -622,7 +622,7 @@ impl History {
         }
         // The History Brush's source is kept whatever its age, so its own tiles come first; the
         // newest states then fill what remains of the budget (the most recent one always).
-        let source = self.brush_source.and_then(|id| undo.iter().position(|s| s.id == id));
+        let source = brush_source.and_then(|id| undo.iter().position(|s| s.id == id));
         if let Some(state) = source.and_then(|i| undo.get(i)) {
             total = total.saturating_add(tile_bytes(&state.doc, &mut seen));
         }
