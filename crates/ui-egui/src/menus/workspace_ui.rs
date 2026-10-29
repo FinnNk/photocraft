@@ -49,8 +49,9 @@ const IDS: [&str; 7] = [
 /// [`saved_names`].
 pub const SAVED: &str = "window.workspace.saved.";
 
-/// View › Pixel Aspect Ratio items of saved custom ratios: `view.pixelAspectRatio.saved.<index>`,
-/// an index into [`ShellUi::custom_pars`].
+/// View › Pixel Aspect Ratio items of saved custom ratios: `view.pixelAspectRatio.saved.<name>`.
+/// Names are unique, and naming the item keeps its id (and any shortcut or colour given to it)
+/// with its ratio when another one is deleted.
 pub const SAVED_PAR: &str = "view.pixelAspectRatio.saved.";
 
 /// Menu ids handled here (live menu items).
@@ -59,8 +60,8 @@ pub fn handles(id: &str) -> bool {
 }
 
 fn saved_par<'a>(app: &'a PhotocraftApp, id: &str) -> Option<&'a CustomPar> {
-    let i = id.strip_prefix(SAVED_PAR)?.parse::<usize>().ok()?;
-    app.ui.shell.custom_pars.get(i)
+    let name = id.strip_prefix(SAVED_PAR)?;
+    app.ui.shell.custom_pars.iter().find(|c| c.name == name)
 }
 
 /// `pixel_aspect` for a custom ratio (see [`crate::view_cmds::pixel_aspect_ratio`]).
@@ -883,16 +884,21 @@ mod tests {
         let last_preset = items.iter().position(|i| i.id == "view.pixelAspectRatio.anamorphic2To1").unwrap();
         let saved: Vec<(&str, Option<bool>, bool)> = items[last_preset + 1..].iter().map(|i| (i.label.as_str(), i.checked, i.enabled)).collect();
         assert_eq!(saved, [("Cinema (1.25)", Some(false), true), ("Scope (2.4)", Some(true), true)]);
-        assert!(crate::menus::is_live(&format!("{SAVED_PAR}0")));
+        assert!(crate::menus::is_live(&format!("{SAVED_PAR}Cinema")));
         crate::menus::invoke(&mut app, &ctx, "view.pixelAspectRatio.square", json!({})).unwrap();
         let cinema = par_items(&app).into_iter().find(|i| i.label == "Cinema (1.25)").unwrap();
         crate::menus::invoke(&mut app, &ctx, &cinema.id, json!({})).unwrap();
         assert_eq!(crate::view_cmds::pixel_aspect_ratio(&app.ui.view.pixel_aspect), 1.25);
         assert_eq!(checked(&app, &cinema.id), Some(true));
         assert_eq!(crate::menus::checked(&app, "view.pixelAspectRatio.square"), Some(false));
-        // A stale index is an error, not a panic.
-        assert!(crate::menus::invoke(&mut app, &ctx, &format!("{SAVED_PAR}7"), json!({})).is_err());
-        assert!(crate::menus::invoke(&mut app, &ctx, &format!("{SAVED_PAR}x"), json!({})).is_err());
+        // Deleting a ratio leaves the others' items with their own ratios; a deleted one's item
+        // is an error, not another ratio.
+        let scope = par_items(&app).into_iter().find(|i| i.label == "Scope (2.4)").unwrap();
+        crate::menus::invoke(&mut app, &ctx, "view.pixelAspectRatio.custom", json!({"delete": "Cinema"})).unwrap();
+        assert!(crate::menus::invoke(&mut app, &ctx, &cinema.id, json!({})).is_err());
+        assert_eq!(par_items(&app).into_iter().find(|i| i.label == "Scope (2.4)").map(|i| i.id), Some(scope.id.clone()));
+        crate::menus::invoke(&mut app, &ctx, &scope.id, json!({})).unwrap();
+        assert_eq!(crate::view_cmds::pixel_aspect_ratio(&app.ui.view.pixel_aspect), 2.4);
     }
 
 }

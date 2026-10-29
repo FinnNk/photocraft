@@ -188,8 +188,8 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     {
         let pp: Vec<String> = vec!["View".into(), "Pixel Aspect Ratio".into()];
         let separator = MenuItem { id: "---".into(), label: "---".into(), path: pp.clone(), shortcut: None, enabled: false, checked: None, color: None };
-        let entries = app.ui.shell.custom_pars.iter().enumerate().map(|(i, c)| {
-            let id = format!("{}{i}", crate::workspace_ui::SAVED_PAR);
+        let entries = app.ui.shell.custom_pars.iter().map(|c| {
+            let id = format!("{}{}", crate::workspace_ui::SAVED_PAR, c.name);
             let checked = checked(app, &id);
             MenuItem { id, label: format!("{} ({})", c.name, c.ratio), path: pp.clone(), shortcut: None, enabled: true, checked, color: None }
         });
