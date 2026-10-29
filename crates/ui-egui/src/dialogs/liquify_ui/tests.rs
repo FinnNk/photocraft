@@ -897,8 +897,9 @@ fn the_preview_shows_liquify_only_inside_the_selection() {
     assert!(outside > 0 && inside_changed > 0, "view: outside {outside}, changed inside {inside_changed}");
 }
 
-/// On a smart object with a filter mask, a new Liquify is shown through that mask, as the engine
-/// applies it (`add_smart_filter` keeps the mask), not through a different selection.
+/// On a smart object with a filter mask, Liquify is shown through that mask, as the engine applies
+/// it (`add_smart_filter` keeps the mask), not through a different selection. Where the mask hides
+/// it the placed pixels show, not the filters below the Liquify being edited.
 #[test]
 fn the_preview_on_a_smart_object_follows_its_filter_mask() {
     let ctx = egui::Context::default();
@@ -918,9 +919,25 @@ fn the_preview_on_a_smart_object_follows_its_filter_mask() {
     ] {
         pointer(&mut app, ev, egui::Modifiers::NONE);
     }
+    // Reopened as a smart filter above the blur, it edits the blurred pixels.
+    commit(&mut app).unwrap();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    open_smart_filter(&mut app, &ctx, layer, 1).unwrap();
+    for ev in [
+        ToolEvent::Down { x: 40.0, y: 30.0, pressure: 1.0 },
+        ToolEvent::Move { x: 60.0, y: 32.0, pressure: 1.0 },
+        ToolEvent::Move { x: 80.0, y: 30.0, pressure: 1.0 },
+        ToolEvent::Up { x: 80.0, y: 30.0 },
+    ] {
+        pointer(&mut app, ev, egui::Modifiers::NONE);
+    }
+    let st = app.session.active().unwrap();
+    let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(st.active_layer.unwrap()).map(|l| &l.content) else { panic!("not a smart object") };
+    let placed = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, 0).unwrap().unwrap();
     let d = app.distort.liquify.as_mut().unwrap();
+    let placed = ProxyImage::new(&placed, d.canvas, PROXY_SIDE);
     let mut original = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
-    d.proxy.render(&LiquifyField::new(d.canvas, d.cell), [0, 0, d.proxy.w, d.proxy.h], &mut original);
+    placed.render(&LiquifyField::new(d.canvas, d.cell), [0, 0, d.proxy.w, d.proxy.h], &mut original);
     let doc_x = |i: usize| d.proxy.bounds.x0 as f64 + ((i % d.proxy.w) as f64 + 0.5) * d.proxy.scale;
     let (mut masked, mut shown_changed) = (0, 0);
     for (i, (a, b)) in d.out.iter().zip(&original).enumerate() {

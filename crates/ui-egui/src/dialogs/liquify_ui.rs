@@ -208,12 +208,16 @@ struct PreviewSelection {
     mask: photocraft_doc::LayerMask,
     /// Coverage at each proxy pixel (row-major, the proxy's size).
     proxy: Vec<f32>,
+    /// What shows where the mask hides the result, when that isn't the dialog's source: a filter
+    /// mask shows the smart object's placed pixels, without any filter (`filter_mask::mix`). With
+    /// its proxy, the same size as the dialog's.
+    base: Option<(Surface, ProxyImage)>,
 }
 
 impl PreviewSelection {
     /// `sel` with its coverage sampled at `proxy`'s pixels. Kept even when every proxy pixel is
     /// selected: a gap narrower than a proxy pixel still shows in the source-resolution crop.
-    fn new(mask: photocraft_doc::LayerMask, proxy: &ProxyImage) -> Self {
+    fn new(mask: photocraft_doc::LayerMask, proxy: &ProxyImage, base: Option<Surface>) -> Self {
         let (bx, by, s) = (f64::from(proxy.bounds.x0), f64::from(proxy.bounds.y0), proxy.scale);
         let mut cov = Vec::with_capacity(proxy.w * proxy.h);
         for y in 0..proxy.h {
@@ -223,7 +227,11 @@ impl PreviewSelection {
                 cov.push(mask.value(dx, dy).clamp(0.0, 1.0));
             }
         }
-        PreviewSelection { mask, proxy: cov }
+        let base = base.map(|b| {
+            let p = ProxyImage::new(&b, proxy.bounds, PROXY_SIDE);
+            (b, p)
+        });
+        PreviewSelection { mask, proxy: cov, base }
     }
 }
 
@@ -415,7 +423,11 @@ impl LiquifyDialog {
         for y in r[1]..r[3].min(self.proxy.h) {
             for x in r[0]..r[2].min(w) {
                 let i = y * w + x;
-                if let (Some(c), Some(old), Some(new)) = (sel.proxy.get(i), self.proxy.px.get(i), self.out.get_mut(i))
+                let old = match &sel.base {
+                    Some((_, p)) => p.px.get(i),
+                    None => self.proxy.px.get(i),
+                };
+                if let (Some(c), Some(old), Some(new)) = (sel.proxy.get(i), old, self.out.get_mut(i))
                     && *c < 1.0
                 {
                     *new = mix(*new, *old, *c);
@@ -432,7 +444,7 @@ impl LiquifyDialog {
         // One row of originals at a time: the crop can be millions of pixels.
         let mut old = vec![[0.0f32; 4]; dw];
         for y in dirty.y0..dirty.y1 {
-            self.source.read_rgba_into(Rect::new(dirty.x0, y, dirty.x1, y + 1), &mut old);
+            sel.base.as_ref().map_or(&self.source, |(b, _)| b).read_rgba_into(Rect::new(dirty.x0, y, dirty.x1, y + 1), &mut old);
             for x in dirty.x0..dirty.x1 {
                 let c = sel.mask.value(x, y).clamp(0.0, 1.0);
                 if c >= 1.0 {
@@ -567,8 +579,17 @@ impl LiquifyDialog {
 
 /// Opens the dialog on the active layer.
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
-    let canvas = app.session.active().ok_or("no document")?.doc.bounds();
+    let (layer, mut surf, _) = crate::distort_ui::active_pixels(app)?;
+    let doc = &app.session.active().ok_or("no document")?.doc;
+    let canvas = doc.bounds();
+    // A smart object's pixels are its filters mixed through its filter mask; OK adds the Liquify
+    // above the filters themselves, so that is what it edits.
+    if let Some(photocraft_doc::LayerContent::Smart(sm)) = doc.layer(layer).map(|l| &l.content)
+        && sm.filter_mask.is_some()
+        && let Ok(Some(filtered)) = photocraft_engine::smart_cmds::render_below_filter(doc, sm, sm.smart_filters.len())
+    {
+        surf = filtered;
+    }
     open_on(app, ctx, layer, surf, Vec::new(), auto_cell(canvas), None)
 }
 
@@ -607,18 +628,20 @@ fn open_on(
     let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
     let out = vec![[0u8; 4]; proxy.w * proxy.h];
     // A smart object's filter mask shows every filter through it, a new Liquify too, whatever is
-    // selected (`smart_cmds::add_smart_filter`). Otherwise a new Liquify goes through the selection;
-    // a smart filter being edited has none.
-    let filter_mask = match st.doc.layer(layer).map(|l| &l.content) {
-        Some(photocraft_doc::LayerContent::Smart(sm)) => sm.filter_mask.clone(),
-        _ => None,
+    // selected (`smart_cmds::add_smart_filter`), over the placed pixels without any filter.
+    // Otherwise a new Liquify goes through the selection; a smart filter being edited has none.
+    let selection = match st.doc.layer(layer).map(|l| &l.content) {
+        Some(photocraft_doc::LayerContent::Smart(sm)) if sm.filter_mask.is_some() => sm.filter_mask.clone().map(|mask| {
+            let placed = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, 0).ok().flatten();
+            PreviewSelection::new(mask, &proxy, placed)
+        }),
+        _ => st
+            .doc
+            .selection
+            .clone()
+            .filter(|_| smart_filter.is_none())
+            .map(|sel| PreviewSelection::new(photocraft_doc::LayerMask { surface: sel, ..photocraft_doc::LayerMask::reveal_all() }, &proxy, None)),
     };
-    let selection = filter_mask
-        .or_else(|| {
-            let sel = st.doc.selection.clone().filter(|_| smart_filter.is_none())?;
-            Some(photocraft_doc::LayerMask { surface: sel, ..photocraft_doc::LayerMask::reveal_all() })
-        })
-        .map(|mask| PreviewSelection::new(mask, &proxy));
     let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
     let mut d = LiquifyDialog {
         document: st.doc.id,
