@@ -166,6 +166,12 @@ pub fn preview_pixels(b: &BrushSettings, w: u32, h: u32, color: [f32; 4]) -> Vec
         })
         .collect();
     if !brush.spacing_enabled {
+        // Smoothed here rather than in the stroke, so the timing follows the path the dabs take:
+        // the smoother moves points and can give several the same time.
+        if brush.smoothing.enabled && brush.smoothing.amount > 0.0 {
+            points = paint::dynamics::smooth_points(&brush.smoothing, 1.0, &points);
+            brush.smoothing.enabled = false;
+        }
         accelerate(&mut points, f64::from(brush.size));
     }
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
@@ -358,6 +364,13 @@ mod tests {
         let fast = covered(&b, right);
         assert!(slow > 0.95, "slow start: overlapping dabs ({slow})");
         assert!(fast > 0.1 && fast < 0.6, "fast end: separate dabs ({fast})");
+        // Smoothing doesn't undo the spread: the preview is timed after it smooths.
+        for amount in [0.5, 0.95] {
+            let smoothed = BrushSettings { smoothing: paint::Smoothing { amount, ..Default::default() }, ..off.clone() };
+            let px = preview_pixels(&smoothed, w, h, [1.0; 4]);
+            let (slow, fast) = (covered(&px, 20..90), covered(&px, w - 90..w - 20));
+            assert!(slow > 0.95 && fast > 0.1 && fast < 0.6, "smoothing {amount}: slow {slow}, fast {fast}");
+        }
         // Through the panel's cached texture, the toggle re-renders the preview in the same slot.
         let ctx = egui::Context::default();
         let _ = stroke_texture(&ctx, "spacing", &on, 120, 40, Color32::WHITE);
