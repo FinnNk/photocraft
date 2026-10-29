@@ -77,7 +77,8 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let v = canvas_view(app, ui, d, cell, view, d == idx);
             if d != idx {
                 app.ui.views[d] = v;
-                if ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| cell.contains(p))) {
+                // Only a press that reaches the tile: not one on a dialog or panel over it (#10069).
+                if ui.input(|i| i.pointer.primary_pressed()) && ui.ctx().rect_contains_pointer(ui.layer_id(), cell) {
                     app.session.set_active(d);
                 }
             }
