@@ -1,9 +1,11 @@
 use super::batch::tile_grid;
-use super::consts::{ACC_FORMAT, CHUNK, CHUNK_UNIFORM, FX_BUDGET, MAP16, MAP32, OP_UNIFORM, PAGE, PATTERN_BUDGET, RESIDENT_BUDGET};
+use super::consts::{ACC_FORMAT, CHUNK, CHUNK_UNIFORM, FX_BUDGET, MAP16, MAP32, MAX_PATTERN_TEXTURE_BYTES, OP_UNIFORM, PAGE, PATTERN_BUDGET, RESIDENT_BUDGET};
 use super::kit::{Kit, SHADER, tex_entry, uniform_entry};
 use super::paging::{cell_rect, field_reaches, first_error, grid_rects};
 use super::textures::{FxEntry, Resident, Tex, TexKind};
-use super::*;
+use super::{
+    Compositor, DeviceHealth, DocId, Document, Fault, HashMap, Kernel, LayerContent, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing,
+};
 
 impl Compositor {
     /// Create a compositor with the default accumulation format ([`ACC_FORMAT`]).
@@ -370,15 +372,28 @@ impl Compositor {
                     if s.lut.as_ref().is_some_and(|l| l.len() > 4096) {
                         return Err(Unsupported(format!("effect blur on `{}` too wide for the GPU path", f.layer.name)));
                     }
+                    if let Some(pat) = &s.pattern {
+                        self.check_pattern(pat)?;
+                    }
                 }
             }
         }
         for pass in &p.passes {
-            if let Some(pat) = pass.pattern
-                && (pat.width > self.device_max || pat.height > self.device_max)
-            {
-                return Err(Unsupported(format!("pattern `{}` larger than the GPU texture limit", pat.name)));
+            if let Some(pat) = pass.pattern {
+                self.check_pattern(pat)?;
             }
+        }
+        Ok(())
+    }
+
+    /// A pattern's texture must fit the device and the per-pattern cap; a larger one renders on
+    /// the CPU compositor.
+    fn check_pattern(&self, pat: &photocraft_doc::Pattern) -> Result<(), Unsupported> {
+        if pat.width > self.device_max || pat.height > self.device_max {
+            return Err(Unsupported(format!("pattern `{}` larger than the GPU texture limit", pat.name)));
+        }
+        if u64::from(pat.width) * u64::from(pat.height) * 16 > MAX_PATTERN_TEXTURE_BYTES {
+            return Err(Unsupported(format!("pattern `{}` too large for a GPU texture; the CPU path paints it", pat.name)));
         }
         Ok(())
     }

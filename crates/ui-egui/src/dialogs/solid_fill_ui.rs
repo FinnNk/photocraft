@@ -86,27 +86,34 @@ pub(crate) fn thumbnail_color(app: &PhotocraftApp, document: DocId, layer: Layer
             if params.get("document")?.as_u64()? != document.0 || params.get("layer")?.as_u64()? != layer.0 {
                 return None;
             }
-            picked_color(&d.fields, original, app.session.documents().iter().find(|st| st.doc.id == document)?.doc.mode)
+            let mode = app.session.documents().iter().find(|st| st.doc.id == document)?.doc.mode;
+            picked_color(&d.fields, original, mode)
         })
         .unwrap_or(original)
 }
 
-/// The colour the picker `f` previews for a fill of colour `original` in a document of colour
-/// mode `mode`, or `None` while it shows the fill unchanged. In a CMYK document that is the inks
-/// picked, as OK stores them, so inks that share the original's display colour still preview
-/// (#8568).
+/// The colour the picker would commit to a fill of `original` in a `mode` document, built as the
+/// engine builds it: the picked hex, and in a CMYK document the inks it was picked as (#8568).
+/// `None` while the picker still shows the fill as it is ([`is_edit`]).
 fn picked_color(f: &Map<String, Value>, original: Color, mode: photocraft_color::ColorMode) -> Option<Color> {
-    use photocraft_color::ColorMode::Cmyk;
-    let inks = color_picker_ui::picked_cmyk(f).filter(|_| mode == Cmyk);
-    let same_inks = inks.is_none_or(|k| original.mode != Cmyk || original.c == k);
-    if f.get("color") == f.get("__orig") && same_inks {
+    if !is_edit(f, original, mode) {
         return None;
     }
     let color = cmds::color_param(f.get("color")?, original, mode).ok()?;
-    Some(match inks {
-        Some(c) => Color { mode: Cmyk, c, alpha: color.alpha },
-        None => color,
-    })
+    Some(color_picker_ui::picked_cmyk(f).filter(|_| mode == photocraft_color::ColorMode::Cmyk).map_or(color, |c| Color {
+        mode: photocraft_color::ColorMode::Cmyk,
+        c,
+        alpha: color.alpha,
+    }))
+}
+
+/// Whether the picker differs from the fill it edits, inks included: different inks can share a
+/// display colour (CMYK 0/0/0/100 and 50/50/50/100 both read black), so the hex alone doesn't
+/// tell, and an RGB or Lab fill given inks in a CMYK document is an edit too.
+fn is_edit(f: &Map<String, Value>, original: Color, mode: photocraft_color::ColorMode) -> bool {
+    let cmyk = photocraft_color::ColorMode::Cmyk;
+    let inks_differ = mode == cmyk && color_picker_ui::picked_cmyk(f).is_some_and(|k| original.mode != cmyk || original.c != k);
+    f.get("color") != f.get("__orig") || inks_differ
 }
 
 /// No-op OK preserves imported high-precision / non-RGB colour values rather than quantising
@@ -121,17 +128,13 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result
     let Some(LayerContent::Fill(Fill::Solid(original))) = st.doc.layer(layer).map(|l| &l.content) else {
         return Err("the target Solid Color Fill layer no longer exists".into());
     };
-    // Different inks can share a display colour (CMYK 0/0/0/100 and 50/50/50/100 are both black):
-    // only a colour whose inks are unchanged too is no edit (#8568).
-    let inks = color_picker_ui::picked_cmyk(f);
-    let same_inks = inks.is_none_or(|k| original.mode != photocraft_color::ColorMode::Cmyk || original.c == k);
-    if f.get("color") == f.get("__orig") && same_inks {
+    if !is_edit(f, *original, st.doc.mode) {
         return Ok(json!({"layer": layer.0, "unchanged": true}));
     }
     let color = f.get("color").cloned().ok_or("missing color")?;
     let object = params.as_object_mut().ok_or("invalid Solid Color target")?;
     object.insert("color".into(), color);
-    if let Some(inks) = inks {
+    if let Some(inks) = color_picker_ui::picked_cmyk(f) {
         object.insert("cmyk".into(), json!(inks));
     }
     app.run(cmds::SET, params)
