@@ -390,6 +390,14 @@ fn cmyk_picker_previews_the_typed_inks_and_seeds_the_foregrounds() {
     let id = open_new(&mut app).unwrap();
     let f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
     assert_eq!(color_picker_ui::picked_cmyk(&f), Some(rich), "seeded with the foreground's inks");
+    // An edit, then Reset (or a click on Current), brings the seeded inks back with the colour,
+    // not inks recomputed from it.
+    let mut edited = f.clone();
+    edited.insert("color".into(), json!("#ff0000"));
+    edited.remove("__cmyk");
+    color_picker_ui::reset(&mut edited);
+    assert_eq!(edited.get("color"), f.get("color"));
+    assert_eq!(color_picker_ui::picked_cmyk(&edited), Some(rich), "Reset restores the seeded inks");
     app.ui.dialogs.retain(|d| d.id != id);
     confirm_new(&mut app, &f).unwrap();
     let st = app.session.active().unwrap();
