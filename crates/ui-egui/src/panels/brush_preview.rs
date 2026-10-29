@@ -360,11 +360,11 @@ mod tests {
         assert!(fast > 0.1 && fast < 0.6, "fast end: separate dabs ({fast})");
         // Through the panel's cached texture, the toggle re-renders the preview in the same slot.
         let ctx = egui::Context::default();
-        stroke_texture(&ctx, "spacing", &on, 120, 40, Color32::WHITE);
+        let _ = stroke_texture(&ctx, "spacing", &on, 120, 40, Color32::WHITE);
         let n = render_count(&ctx);
-        stroke_texture(&ctx, "spacing", &on, 120, 40, Color32::WHITE);
+        let _ = stroke_texture(&ctx, "spacing", &on, 120, 40, Color32::WHITE);
         assert_eq!(render_count(&ctx), n, "unchanged settings reuse the texture");
-        stroke_texture(&ctx, "spacing", &off, 120, 40, Color32::WHITE);
+        let _ = stroke_texture(&ctx, "spacing", &off, 120, 40, Color32::WHITE);
         assert_eq!(render_count(&ctx), n + 1, "turning Spacing off re-renders the preview");
     }
 
