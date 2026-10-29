@@ -271,7 +271,9 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
     // frame until the dialog was wider than the screen (#9965).
     let settings_key = egui::Id::unique("web-settings-width");
     let settings_w = ui.data(|d| d.get_temp::<f32>(settings_key)).unwrap_or(250.0).max(250.0);
-    let area = egui::vec2((ui.available_width() - settings_w - 20.0 - ui.spacing().item_spacing.x).max(260.0), (ui.available_height() - 48.0).max(180.0));
+    // The previews shrink before the settings do, down to a small floor that still fits beside
+    // them in a small window.
+    let area = egui::vec2((ui.available_width() - settings_w - 20.0 - ui.spacing().item_spacing.x).max(120.0), (ui.available_height() - 48.0).max(120.0));
     ui.horizontal_top(|ui| {
         // Previews grow with the dialog; settings retain their compact width.
         ui.vertical(|ui| {

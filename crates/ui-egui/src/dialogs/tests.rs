@@ -441,6 +441,9 @@ fn save_for_web_fits_the_window_and_keeps_its_size() {
         (egui::vec2(800.0, 600.0), (4000, 3000), 1.0),
         (egui::vec2(1280.0, 720.0), (6000, 4000), 1.25),
         (egui::vec2(1536.0, 864.0), (300, 2000), 1.5),
+        // Smaller than the dialog's own minimum, in points.
+        (egui::vec2(512.0, 384.0), (640, 480), 1.0),
+        (egui::vec2(480.0, 360.0), (4000, 3000), 2.0),
     ] {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": doc.0, "height": doc.1})).unwrap();
@@ -453,7 +456,10 @@ fn save_for_web_fits_the_window_and_keeps_its_size() {
             rects[0]
         };
         let opened = frame(&h);
-        assert!(opened.left() >= 0.0 && opened.right() <= size.x, "{size:?}: the dialog at {opened:?} is off screen");
+        assert!(
+            opened.left() >= 0.0 && opened.top() >= 0.0 && opened.right() <= size.x && opened.bottom() <= size.y,
+            "{size:?} at {ppp}: the dialog at {opened:?} is off screen"
+        );
         // The growth was a fraction of a point a frame: give it a few hundred.
         h.run_steps(300);
         assert_eq!(frame(&h), opened, "{size:?}: the dialog changed size on its own");
