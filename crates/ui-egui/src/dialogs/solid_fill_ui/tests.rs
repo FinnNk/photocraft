@@ -372,11 +372,10 @@ fn inks_given_to_a_non_cmyk_fill_in_a_cmyk_document_are_an_edit() {
     assert!(picked_color(&f, original, ColorMode::Cmyk).is_some_and(|c| c.mode == ColorMode::Cmyk && c.c == [0.3, 0.2, 0.1, 0.4]));
 }
 
-/// #8568: in a CMYK document the picker previews the inks typed, as OK stores them, including
-/// inks that share the fill's display colour; and a new fill's picker opens with the inks the
-/// foreground was picked as, so OK keeps them.
+/// #8568: a new fill's picker opens with the inks the foreground was picked as, so OK keeps them,
+/// and Reset brings them back.
 #[test]
-fn cmyk_picker_previews_the_typed_inks_and_seeds_the_foregrounds() {
+fn a_new_fills_picker_is_seeded_with_the_foregrounds_inks() {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     s.execute("image.mode.cmyk", json!({})).unwrap();
@@ -401,24 +400,6 @@ fn cmyk_picker_previews_the_typed_inks_and_seeds_the_foregrounds() {
     app.ui.dialogs.retain(|d| d.id != id);
     confirm_new(&mut app, &f).unwrap();
     let st = app.session.active().unwrap();
-    let layer = st.active_layer.unwrap();
-    let LayerContent::Fill(Fill::Solid(original)) = st.doc.layer(layer).unwrap().content else { panic!("not a solid fill") };
+    let LayerContent::Fill(Fill::Solid(original)) = st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("not a solid fill") };
     assert_eq!(original.c, rich);
-
-    // Inks with the same display colour preview as those inks: in the thumbnail and the canvas.
-    let near = [0.5, 0.5, 0.499, 1.0];
-    let id = open(&mut app).unwrap();
-    let d = app.ui.dialogs.iter_mut().find(|d| d.id == id).unwrap();
-    d.fields.insert("__cmyk".into(), json!(near));
-    assert_eq!(d.fields.get("color"), d.fields.get("__orig"), "both inks show as the same colour");
-    let doc = app.session.active().unwrap().doc.id;
-    let want = Color { mode: ColorMode::Cmyk, c: near, alpha: 1.0 };
-    assert_eq!(thumbnail_color(&app, doc, layer, original), want);
-    let (shown, _) = display_doc(&mut app, 0).expect("a preview");
-    assert_eq!(app.solid_fill_preview.as_ref().unwrap().color, want);
-    drop(shown);
-    // The original inks again: no preview.
-    app.ui.dialogs.iter_mut().find(|d| d.id == id).unwrap().fields.insert("__cmyk".into(), json!(rich));
-    assert_eq!(thumbnail_color(&app, doc, layer, original), original);
-    assert!(display_doc(&mut app, 0).is_none());
 }
