@@ -60,6 +60,18 @@ impl PhotocraftApp {
         self.window_toggles_in(egui::ViewportId::ROOT, index)
     }
 
+    /// The settings a new window for document `index` starts with: the live ones when the window
+    /// that has them shows that document (the window it was opened from), else the document's
+    /// own main-window ones.
+    pub(crate) fn new_window_toggles(&self, index: usize) -> WindowToggles {
+        let shows = match self.toggles_owner {
+            Some(ToggleOwner::Window(id)) => self.ui.windows.iter().any(|w| w.id == id && w.document == index),
+            Some(ToggleOwner::Doc(id)) => self.session.documents().get(index).is_some_and(|d| d.doc.id == id),
+            None => true,
+        };
+        if shows { self.window_toggles() } else { self.window_toggles_of(index) }
+    }
+
     fn stored_toggles(&self, key: ToggleOwner) -> Option<WindowToggles> {
         match key {
             ToggleOwner::Doc(id) => self.session.documents().iter().position(|d| d.doc.id == id).and_then(|i| self.ui.views.get(i)).and_then(|v| v.toggles),

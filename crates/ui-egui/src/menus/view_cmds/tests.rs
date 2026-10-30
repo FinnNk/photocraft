@@ -111,6 +111,9 @@ fn two_windows_of_one_document_keep_their_own_view_settings() {
     assert_eq!(app.window_toggles_in(extra, 0), flipped, "the extra window still draws with its own");
     focus(&mut app, true);
     assert_eq!(app.window_toggles(), flipped);
+    // A third window opened from the focused extra window starts with that window's settings.
+    let third = menu(&mut app, &ctx, "window.newWindowForDocument", json!({})).unwrap()["window"].as_u64().unwrap();
+    assert_eq!(app.ui.windows.iter().find(|w| w.id == third).and_then(|w| w.view.toggles), Some(flipped));
 }
 
 /// Float All in Windows gives each document's window that document's own View settings, not
