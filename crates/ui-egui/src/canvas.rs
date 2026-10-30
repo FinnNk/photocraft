@@ -104,7 +104,7 @@ pub(crate) use tabs::arranged_cells;
 pub(crate) use tabs::tab_title_at;
 #[cfg(test)]
 use tabs::{TEAR_OFF, pro_tab_title, tab_context_items, tab_drop_index, tab_move_target, tabs, torn_off};
-pub use tabs::{TabStrip, document_area, extra_windows};
+pub use tabs::{TabStrip, doc_window_viewport, document_area, extra_windows};
 use tabs::{dots, paint_dots};
 #[cfg(test)]
 use tabs::{main_canvas_document, move_target_after_filter};
@@ -243,7 +243,7 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
     };
     // Selection outline: true boundary, animated marching ants (cached per revision).
     // Extras is per document window: an arranged document's own hides or shows its ants.
-    let extras = app.window_toggles_of(input.idx).extras;
+    let extras = app.window_toggles_in(input.ctx.viewport_id(), input.idx).extras;
     if let Some(sel) = outlined.filter(|_| extras && app.ui.view.show.selection_edges && !polygon_replaces_selection(app)) {
         // Trace at display resolution over the visible part only; key by the mask's tile identity
         // (not the document revision) so unrelated edits don't re-trace it. The step is in
@@ -1634,7 +1634,7 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
     let layer_edges = input.layer_edges;
     let camera = input.camera;
     app.tool_override = None;
-    if let Some(b) = layer_edges_rect(app, idx) {
+    if let Some(b) = layer_edges_rect(app, ctx.viewport_id(), idx) {
         painter.set(layer_edges, egui::Shape::rect_stroke(xf.doc_rect(b), 0, Stroke::new(1.0, LAYER_EDGES), egui::StrokeKind::Outside));
     }
     // A tool drag held past the canvas edge scrolls the view toward the pointer (#4183); the
@@ -1670,7 +1670,7 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
         if app.guide_drag != before {
             ctx.request_repaint();
         }
-    } else if app.window_toggles_of(idx).rulers {
+    } else if app.window_toggles_in(ctx.viewport_id(), idx).rulers {
         crate::rulers::paint_rulers(app, ui, full, &xf, doc);
     }
     // After the ruler drags above, so the readout shows where the guide is now, and not after a
@@ -1786,7 +1786,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Every document view has its rulers, the tiles of Window › Arrange and floating windows
     // too, as in Photoshop (#6017).
     // Each document window has its own rulers: an arranged document keeps its own.
-    let rect = crate::rulers::content_rect_with(app.window_toggles_of(idx).rulers, rect);
+    let rect = crate::rulers::content_rect_with(app.window_toggles_in(ui.ctx().viewport_id(), idx).rulers, rect);
     // Both wheel reads share one owner so snap-zoom input is accumulated only once per frame.
     let wheel_owner = ui.scope_id().with(("canvas-wheel", idx));
     // Direct navigation starts from the authoritative camera. This also means a click or drag
@@ -1820,7 +1820,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     update_polygon_camera(app, &ctx, (idx, primary), rect, &mut view, ppp, aspect);
 
     // Flip Horizontal is per window: another arranged document shows its own.
-    let flip = app.window_toggles_of(idx).flip_horizontal;
+    let flip = app.window_toggles_in(ui.ctx().viewport_id(), idx).flip_horizontal;
     // Document rendering follows the target; only shader uniforms and overlay geometry ease.
     let target_xf = ViewXform { rect, zoom: view.zoom / ppp, center: view.center, flip, rotation: view.rotation, aspect };
     let render_zoom = view.zoom;

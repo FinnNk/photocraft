@@ -85,6 +85,34 @@ fn flip_extras_rulers_grid_and_guides_are_per_document_window() {
     assert_eq!(app.window_toggles(), start);
 }
 
+/// Two windows on one document (Window › Arrange › New Window for Document) keep their own View
+/// menu settings, as in Photoshop: a new window starts with its source's, and the settings
+/// changed in one, while it has focus, leave the other alone.
+#[test]
+fn two_windows_of_one_document_keep_their_own_view_settings() {
+    let (mut app, ctx) = app_with(1);
+    app.sync_views();
+    let start = app.window_toggles();
+    let wid = menu(&mut app, &ctx, "window.newWindowForDocument", json!({})).unwrap()["window"].as_u64().unwrap();
+    let extra = crate::canvas::doc_window_viewport(wid);
+    let focus = |app: &mut PhotocraftApp, on: bool| {
+        app.ui.windows.iter_mut().for_each(|w| w.focused = on && w.id == wid);
+        app.sync_views();
+    };
+    focus(&mut app, true);
+    assert_eq!(app.window_toggles(), start, "the new window starts with its source's settings");
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    menu(&mut app, &ctx, "view.rulers", json!({})).unwrap();
+    let flipped = app.window_toggles();
+    assert_ne!(flipped, start);
+    assert_eq!(app.window_toggles_in(egui::ViewportId::ROOT, 0), start, "the main window's canvas keeps its own");
+    focus(&mut app, false);
+    assert_eq!(app.window_toggles(), start, "back in the main window, its settings are live again");
+    assert_eq!(app.window_toggles_in(extra, 0), flipped, "the extra window still draws with its own");
+    focus(&mut app, true);
+    assert_eq!(app.window_toggles(), flipped);
+}
+
 #[test]
 fn show_snap_extras_and_screen_modes_are_state() {
     let (mut app, ctx) = app_with(1);
