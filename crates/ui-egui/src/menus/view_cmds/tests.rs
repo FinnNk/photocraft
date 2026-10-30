@@ -70,6 +70,9 @@ fn flip_extras_rulers_grid_and_guides_are_per_document_window() {
     switch(&mut app, 1);
     assert_eq!(app.window_toggles(), start, "the other document keeps its own");
     assert_eq!(app.window_toggles_of(0), changed, "an arranged tile draws the first with its own");
+    let full = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 100.0));
+    let inset = |rulers| crate::rulers::content_rect_with(rulers, full);
+    assert_ne!(inset(app.window_toggles_of(0).rulers), inset(app.window_toggles_of(1).rulers), "each tile keeps its own rulers");
     assert_eq!(checked(&app, "view.flipHorizontal"), Some(start.flip_horizontal));
     switch(&mut app, 0);
     assert_eq!(app.window_toggles(), changed, "and coming back restores them");
