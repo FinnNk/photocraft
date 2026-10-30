@@ -800,6 +800,11 @@ fn a_press_on_a_dialog_over_an_arranged_tile_keeps_the_active_document() {
                 .fixed_pos(egui::pos2(60.0, 120.0))
                 .fixed_size(egui::vec2(260.0, 200.0))
                 .show(ui.ctx(), |ui| ui.label("Levels"));
+            // An open menu (View › Pixel Aspect Ratio, say): a foreground popup below the dialog.
+            egui::Area::new(egui::Id::unique("arrange-test-menu")).order(egui::Order::Foreground).fixed_pos(egui::pos2(60.0, 360.0)).show(ui.ctx(), |ui| {
+                ui.set_min_size(egui::vec2(200.0, 80.0));
+                ui.label("Anamorphic 2:1 (2)")
+            });
         },
         app,
     );
@@ -821,9 +826,17 @@ fn a_press_on_a_dialog_over_an_arranged_tile_keeps_the_active_document() {
     let on_dialog = other.1.intersect(dialog).center();
     press(&mut h, on_dialog);
     assert_eq!(h.state().session.active_index(), Some(active), "a press on the dialog leaves the active document alone");
+    // Nor does choosing a menu item over the tile: the item's command must reach the active
+    // document, not the one under the menu.
+    let menu = h.ctx.memory(|m| m.area_rect(egui::Id::unique("arrange-test-menu"))).unwrap();
+    assert!(other.1.intersects(menu), "the menu covers part of the other tile: {:?} and {menu:?}", other.1);
+    press(&mut h, other.1.intersect(menu).center());
+    assert_eq!(h.state().session.active_index(), Some(active), "a press on a menu leaves the active document alone");
     // A press on the dialog and a move off it that arrive in one frame: the press decides.
-    let clear =
-        [other.1.center_bottom() - egui::vec2(0.0, 20.0), other.1.right_center() - egui::vec2(20.0, 0.0)].into_iter().find(|p| !dialog.contains(*p)).unwrap();
+    let clear = [other.1.center_bottom() - egui::vec2(0.0, 20.0), other.1.right_center() - egui::vec2(20.0, 0.0)]
+        .into_iter()
+        .find(|p| !dialog.contains(*p) && !menu.contains(*p))
+        .unwrap();
     h.event(egui::Event::PointerMoved(on_dialog));
     h.run_steps(1);
     // `Harness::event` runs a frame per event, so both go into one frame's input.
