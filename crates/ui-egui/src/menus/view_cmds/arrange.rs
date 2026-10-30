@@ -44,7 +44,8 @@ pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize, f
     view.zoom_transition = None;
     view.display_camera = None;
     view.fit_pending = offset > 0 || view.fit_pending;
-    view.toggles = Some(app.window_toggles());
+    // The window takes over its document's own settings (each one's, when all are floated).
+    view.toggles = Some(app.window_toggles_of(doc));
     app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true, floating, focused: false, position: None });
     wid
 }

@@ -113,6 +113,26 @@ fn two_windows_of_one_document_keep_their_own_view_settings() {
     assert_eq!(app.window_toggles(), flipped);
 }
 
+/// Float All in Windows gives each document's window that document's own View settings, not
+/// the active one's.
+#[test]
+fn floating_every_document_keeps_each_ones_view_settings() {
+    let (mut app, ctx) = app_with(2);
+    app.session.set_active(0);
+    app.sync_views();
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    let first = app.window_toggles();
+    app.session.set_active(1);
+    app.sync_views();
+    let second = app.window_toggles();
+    assert_ne!(first, second);
+    menu(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    for (doc, want) in [(0, first), (1, second)] {
+        let w = app.ui.windows.iter().find(|w| w.document == doc).unwrap();
+        assert_eq!(w.view.toggles, Some(want), "document {doc}'s window");
+    }
+}
+
 #[test]
 fn show_snap_extras_and_screen_modes_are_state() {
     let (mut app, ctx) = app_with(1);

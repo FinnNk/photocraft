@@ -56,7 +56,6 @@ impl PhotocraftApp {
     }
 
     /// [`Self::window_toggles_in`] for the main window.
-    #[cfg(test)]
     pub(crate) fn window_toggles_of(&self, index: usize) -> WindowToggles {
         self.window_toggles_in(egui::ViewportId::ROOT, index)
     }
