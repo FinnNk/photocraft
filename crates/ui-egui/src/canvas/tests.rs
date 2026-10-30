@@ -1567,17 +1567,29 @@ fn painting_a_group_is_refused_at_the_press_with_a_message() {
     app.ui.tool = Tool::RectMarquee;
     tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
     assert!(errors(&app).is_empty());
-    tool_event(&mut app, ToolEvent::Up { x: 10.0, y: 10.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 15.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 15.0 }, egui::Modifiers::NONE);
+    assert!(app.session.active().unwrap().doc.selection.is_some(), "a marquee still selects with a group active");
+    app.run("select.deselect", json!({})).unwrap();
     // A group's mask can be painted: targeting it paints, without the message.
     app.run("layer.layerMask.revealAll", json!({})).unwrap();
     app.ui.mask_target = true;
     app.sync_mask_targets();
     assert_eq!(paint_target(&app), json!("mask"));
+    let mask_at = |app: &PhotocraftApp, x: i32| {
+        let st = app.session.active().unwrap();
+        st.doc.layer(group).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, 10, 0)
+    };
+    let before = mask_at(&app, 15);
+    // Black on a reveal-all mask hides: a stroke that paints shows.
+    app.run("tools.setColors", json!({"foreground": [0.0, 0.0, 0.0, 1.0], "background": [1.0, 1.0, 1.0, 1.0]})).unwrap();
     app.ui.tool = Tool::Brush;
     tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
     assert!(errors(&app).is_empty(), "the mask is paintable");
     assert!(app.drag.is_some(), "the stroke starts on the mask");
-    tool_event(&mut app, ToolEvent::Up { x: 10.0, y: 10.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 20.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 10.0 }, egui::Modifiers::NONE);
+    assert_ne!(mask_at(&app, 15), before, "the stroke painted the group's mask");
 }
 
 /// #4298: an adjustment layer has no pixels, so after its icon thumbnail is clicked (the
