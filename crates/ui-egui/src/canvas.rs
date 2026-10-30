@@ -1816,7 +1816,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let aspect = sync_view_to_document(app, &ctx, &mut view, &doc, rect, ppp);
     update_polygon_camera(app, &ctx, (idx, primary), rect, &mut view, ppp, aspect);
 
-    let flip = app.ui.view.flip_horizontal;
+    // Flip Horizontal is per window: another arranged document shows its own.
+    let flip = app.window_toggles_of(idx).flip_horizontal;
     // Document rendering follows the target; only shader uniforms and overlay geometry ease.
     let target_xf = ViewXform { rect, zoom: view.zoom / ppp, center: view.center, flip, rotation: view.rotation, aspect };
     let render_zoom = view.zoom;
