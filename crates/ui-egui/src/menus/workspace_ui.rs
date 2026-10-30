@@ -103,9 +103,9 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "window.panel.modifierKeys" => Some(app.ui.shell.modifier_keys),
         "window.workspace.lockWorkspace" => Some(app.session.prefs().workspace_locked),
         // A saved ratio in use checks its own item instead (one tick in the submenu).
-        "view.pixelAspectRatio.custom" => Some(
-            app.ui.view.pixel_aspect.starts_with("custom:") && !app.ui.shell.custom_pars.iter().any(|c| custom_aspect(c) == app.ui.view.pixel_aspect),
-        ),
+        "view.pixelAspectRatio.custom" => {
+            Some(app.ui.view.pixel_aspect.starts_with("custom:") && !app.ui.shell.custom_pars.iter().any(|c| custom_aspect(c) == app.ui.view.pixel_aspect))
+        }
         _ => None,
     }
 }
@@ -463,9 +463,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     // overflows and the auto-sized window widens by it every frame (#9950).
                     let track = (ui.available_width() - 60.0 - ui.spacing().item_spacing.x).max(40.0);
                     let slid = ui.allocate_ui(vec2(track, ui.spacing().interact_size.y), |ui| crate::widgets::slider(ui, &mut v, range.clone(), None)).inner;
-                    if slid.changed()
-                        | crate::widgets::value_field(ui, &mut v, range, "", 60.0).accessible_name(tl!(&label)).changed()
-                    {
+                    if slid.changed() | crate::widgets::value_field(ui, &mut v, range, "", 60.0).accessible_name(tl!(&label)).changed() {
                         f.insert(key.into(), json!(v));
                     }
                 });
@@ -905,5 +903,4 @@ mod tests {
         crate::menus::invoke(&mut app, &ctx, &scope.id, json!({})).unwrap();
         assert_eq!(crate::view_cmds::pixel_aspect_ratio(&app.ui.view.pixel_aspect), 2.4);
     }
-
 }
