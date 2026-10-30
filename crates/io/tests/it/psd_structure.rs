@@ -746,9 +746,9 @@ fn resolution_info_cm_display_unit_stays_pixels_per_inch() {
     assert!((written.v_res() - 300.0).abs() < 1e-3, "{}", written.v_res());
 }
 
-/// #9950: the pixel aspect ratio (resource 1064) is the document's: read on open, written once
-/// on save (from the document, not a kept copy), and nothing for square pixels. A ratio that can't
-/// be drawn, or a short record, opens square.
+/// #9950: the pixel aspect ratio (resource 1064) is the document's: read on open and written once
+/// on save (from the document, not a kept copy), square pixels too, as Photoshop does. A ratio
+/// that can't be drawn, or a short record, opens square.
 #[test]
 fn pixel_aspect_ratio_resource_round_trips_with_the_document() {
     let par = |f: &PsdFile| {
@@ -765,7 +765,7 @@ fn pixel_aspect_ratio_resource_round_trips_with_the_document() {
     d.pixel_aspect = 1.5;
     assert_eq!(par(&document_to_psd(&d)), [1.5]);
     d.pixel_aspect = 1.0;
-    assert!(par(&document_to_psd(&d)).is_empty(), "square pixels write no record");
+    assert_eq!(par(&document_to_psd(&d)), [1.0], "square pixels write 1, as Photoshop does");
     for bad in [photocraft_psd::PixelAspectRatio::new(f64::NAN).to_bytes(), photocraft_psd::PixelAspectRatio::new(0.0).to_bytes(), vec![0, 0, 0, 2, 63]] {
         let mut f = testgen::small(Version::Psd, Compression::Raw);
         f.resources.push(photocraft_psd::ImageResource::new(1064, bad));

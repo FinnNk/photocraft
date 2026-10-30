@@ -29,10 +29,10 @@ pub(crate) fn pascal_names_resource(names: &[&str]) -> Vec<u8> {
     v
 }
 
-/// View › Pixel Aspect Ratio (resource 1064), for a document whose pixels aren't square.
-pub(crate) fn pixel_aspect_resource(doc: &Document) -> Option<ImageResource> {
-    (doc.pixel_aspect != 1.0)
-        .then(|| ImageResource::new(photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO, photocraft_psd::PixelAspectRatio::new(doc.pixel_aspect).to_bytes()))
+/// View › Pixel Aspect Ratio (resource 1064). Photoshop writes it in every file, square or not, so
+/// a file read and saved again keeps it.
+pub(crate) fn pixel_aspect_resource(doc: &Document) -> ImageResource {
+    ImageResource::new(photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO, photocraft_psd::PixelAspectRatio::new(doc.pixel_aspect).to_bytes())
 }
 
 pub(crate) fn guides_resource(doc: &Document) -> Vec<u8> {
