@@ -71,6 +71,13 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(shown) = arranged_cells(app, rect) {
         app.arrange_start = shown.first().map_or(0, |(d, _)| *d);
         let t = crate::theme::Tokens::get(ui.ctx());
+        // Where a press landed this frame: the pointer may have moved on since, in the same frame.
+        let press = ui.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
+                _ => None,
+            })
+        });
         for (d, cell) in shown {
             let cell = cell.shrink(1.0);
             let view = app.ui.views[d].clone();
@@ -78,7 +85,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if d != idx {
                 app.ui.views[d] = v;
                 // Only a press that reaches the tile: not one on a dialog or panel over it (#10069).
-                if ui.input(|i| i.pointer.primary_pressed()) && ui.ctx().rect_contains_pointer(ui.layer_id(), cell) {
+                if press.is_some_and(|p| cell.contains(p) && ui.ctx().layer_id_at(p) == Some(ui.layer_id())) {
                     app.session.set_active(d);
                 }
             }

@@ -768,7 +768,11 @@ fn a_press_on_a_dialog_over_an_arranged_tile_keeps_the_active_document() {
             }
             egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
             // A dialog (Levels, say) over the left half of the document area.
-            egui::Window::new("Levels").id(egui::Id::unique("arrange-test-dialog")).fixed_pos(egui::pos2(60.0, 120.0)).fixed_size(egui::vec2(260.0, 200.0)).show(ui.ctx(), |ui| ui.label("Levels"));
+            egui::Window::new("Levels")
+                .id(egui::Id::unique("arrange-test-dialog"))
+                .fixed_pos(egui::pos2(60.0, 120.0))
+                .fixed_size(egui::vec2(260.0, 200.0))
+                .show(ui.ctx(), |ui| ui.label("Levels"));
         },
         app,
     );
@@ -790,11 +794,21 @@ fn a_press_on_a_dialog_over_an_arranged_tile_keeps_the_active_document() {
     let on_dialog = other.1.intersect(dialog).center();
     press(&mut h, on_dialog);
     assert_eq!(h.state().session.active_index(), Some(active), "a press on the dialog leaves the active document alone");
+    // A press on the dialog and a move off it that arrive in one frame: the press decides.
+    let clear =
+        [other.1.center_bottom() - egui::vec2(0.0, 20.0), other.1.right_center() - egui::vec2(20.0, 0.0)].into_iter().find(|p| !dialog.contains(*p)).unwrap();
+    h.event(egui::Event::PointerMoved(on_dialog));
+    h.run_steps(1);
+    // `Harness::event` runs a frame per event, so both go into one frame's input.
+    h.input_mut().events.extend([
+        egui::Event::PointerButton { pos: on_dialog, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+        egui::Event::PointerMoved(clear),
+    ]);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: clear, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(h.state().session.active_index(), Some(active), "a press on the dialog, then a move in the same frame, leaves it alone");
     // The tile itself, clear of the dialog, still switches documents.
-    let clear = [other.1.center_bottom() - egui::vec2(0.0, 20.0), other.1.right_center() - egui::vec2(20.0, 0.0)]
-        .into_iter()
-        .find(|p| !dialog.contains(*p))
-        .unwrap();
     press(&mut h, clear);
     assert_eq!(h.state().session.active_index(), Some(other.0), "a press on the tile activates its document");
 }
