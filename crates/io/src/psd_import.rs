@@ -19,8 +19,9 @@ use crate::blocks;
 use crate::pixels::{interleave, max_sample, sample_for_depth, zero_sample};
 
 /// Resources that are mapped to document fields or regenerated on export.
-pub(crate) const MAPPED_RESOURCES: [u16; 19] = [
+pub(crate) const MAPPED_RESOURCES: [u16; 20] = [
     ids::GLOBAL_ANGLE,
+    ids::PIXEL_ASPECT_RATIO,
     ids::GLOBAL_ALTITUDE,
     ids::RESOLUTION_INFO,
     ids::ICC_PROFILE,
@@ -1075,6 +1076,15 @@ fn read_initial_metadata(file: &PsdFile, global: &[PsdGlobalBlock], doc: &mut Do
                 }
             }
             ids::ICC_PROFILE => doc.icc_profile = Some(Arc::new(resource.data.clone())),
+            // A ratio that can't be drawn (zero, negative, NaN) leaves the pixels square.
+            ids::PIXEL_ASPECT_RATIO => {
+                if let Ok(par) = photocraft_psd::PixelAspectRatio::from_bytes(&resource.data)
+                    && par.ratio.is_finite()
+                    && par.ratio > 0.0
+                {
+                    doc.pixel_aspect = par.ratio;
+                }
+            }
             ids::XMP => doc.metadata.xmp = Some(String::from_utf8_lossy(&resource.data).into()),
             ids::EXIF => doc.metadata.exif = Some(Arc::new(resource.data.clone())),
             1032 => parse_guides(&resource.data, doc),

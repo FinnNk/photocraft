@@ -29,6 +29,12 @@ pub(crate) fn pascal_names_resource(names: &[&str]) -> Vec<u8> {
     v
 }
 
+/// View › Pixel Aspect Ratio (resource 1064), for a document whose pixels aren't square.
+pub(crate) fn pixel_aspect_resource(doc: &Document) -> Option<ImageResource> {
+    (doc.pixel_aspect != 1.0)
+        .then(|| ImageResource::new(photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO, photocraft_psd::PixelAspectRatio::new(doc.pixel_aspect).to_bytes()))
+}
+
 pub(crate) fn guides_resource(doc: &Document) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&1u32.to_be_bytes());
@@ -88,6 +94,10 @@ pub(crate) fn path_resources(doc: &Document, warnings: &mut Vec<String>) -> Vec<
 
 /// Whether an imported (unmodelled) resource still describes the document and is written back.
 pub(crate) fn keep_imported_resource(doc: &Document, id: u16, data: &[u8]) -> bool {
+    // The pixel aspect ratio is the document's own (`pixel_aspect_resource`), never a kept copy.
+    if id == photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO {
+        return false;
+    }
     // Measurement scale / count resources: only while they still describe the document.
     if !crate::annotations_map::keep_resource(doc, id) {
         return false;
