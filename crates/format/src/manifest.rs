@@ -49,6 +49,9 @@ pub struct DocM {
     /// The rulers' zero point in document pixels (absent in older files: the top-left).
     #[serde(default)]
     pub ruler_origin: [f64; 2],
+    /// Color Sampler points in document pixels (absent in older files: none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub color_samplers: Vec<[f64; 2]>,
     pub selection: Option<SurfaceM>,
     pub metadata: MetadataM,
     pub global_light: GlobalLight,

@@ -227,6 +227,8 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         channels,
         guides: _,
         ruler_origin: _,
+        // Read on top of the composite, never part of it.
+        color_samplers: _,
         selection: _,
         metadata: _,
         global_light,
@@ -329,6 +331,8 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         channels: _,
         guides,
         ruler_origin,
+        // Never moved by a selection step (and never a step of their own).
+        color_samplers: _,
         selection: _,
         metadata,
         global_light: _,

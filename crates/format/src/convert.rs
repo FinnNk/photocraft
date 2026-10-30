@@ -240,6 +240,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         channels: d.channels.iter().map(|c| channel_m(c, sink)).collect(),
         guides: d.guides.clone(),
         ruler_origin: d.ruler_origin,
+        color_samplers: d.color_samplers.clone(),
         selection: d.selection.as_ref().map(|s| surface_m(s, sink)),
         metadata: MetadataM {
             xmp: d.metadata.xmp.as_deref().map(str::to_owned),
@@ -653,6 +654,8 @@ impl Loader<'_> {
             channels,
             guides: m.guides.clone(),
             ruler_origin: m.ruler_origin,
+            // A damaged or hand-edited list keeps only points it can place, up to Photoshop's limit.
+            color_samplers: m.color_samplers.iter().filter(|p| p.iter().all(|v| v.is_finite())).take(photocraft_doc::MAX_COLOR_SAMPLERS).copied().collect(),
             selection: self.opt_surface(&m.selection)?,
             metadata: md,
             global_light: m.global_light,
