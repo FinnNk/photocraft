@@ -25,7 +25,7 @@ impl Separable {
         match *params {
             FilterParams::GaussianBlur { radius } => Some(match blur::box_widths(params) {
                 Some(boxes) => Separable::Boxes(boxes),
-                None => Separable::Kernel(blur::gaussian_kernel(radius)),
+                None => Separable::Kernel(blur::gaussian_blur_kernel(radius)),
             }),
             _ => None,
         }
@@ -75,7 +75,7 @@ mod tests {
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
     use photocraft_raster::{Interrupt, Surface};
 
-    const RADII: [f32; 9] = [0.01, 0.3, 0.8, 2.0, 4.0, 4.5, 12.0, 40.0, 250.0];
+    const RADII: [f32; 11] = [0.01, 0.05, 0.1, 0.3, 0.8, 2.0, 4.0, 4.5, 12.0, 40.0, 250.0];
 
     /// The CPU blur's own choice: the exact kernel up to radius 4, boxes beyond; and its halo
     /// (how far the CPU grows an output area) covers the reach.
@@ -87,7 +87,7 @@ mod tests {
             match &blur {
                 Separable::Kernel(k) => {
                     assert!(radius <= 4.0, "radius {radius}");
-                    assert_eq!(k, &blur::gaussian_kernel(radius));
+                    assert_eq!(k, &blur::gaussian_blur_kernel(radius));
                     assert_eq!(k.len() % 2, 1);
                     assert!((k.iter().sum::<f32>() - 1.0).abs() < 1e-5);
                 }
@@ -135,8 +135,11 @@ mod tests {
             // Nothing past the reach; the exact kernel reaches all of it. (A single pixel's box
             // tails are smaller than the running sums' residue, so they aren't checked for that.)
             assert!(dot.inflate(reach).contains_rect(&touched), "radius {radius}: {touched:?} past the reach {reach}");
-            if matches!(Separable::of(&params), Some(Separable::Kernel(_))) {
-                assert_eq!(touched, dot.inflate(reach), "radius {radius}");
+            if let Some(Separable::Kernel(k)) = Separable::of(&params) {
+                // Calibrated subpixel kernels have tails below the visibility threshold.
+                let center = k.len() / 2;
+                let visible = k.iter().enumerate().filter(|(_, w)| **w * k[center] > 1e-6).map(|(i, _)| i.abs_diff(center)).max().unwrap_or(0);
+                assert_eq!(touched, dot.inflate(visible as i32), "radius {radius}");
             }
         }
     }
