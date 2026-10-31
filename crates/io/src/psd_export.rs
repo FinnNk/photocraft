@@ -28,7 +28,8 @@ pub use document::{document_to_psd, document_to_psd_with};
 use document::{document_to_psd_nested, mask_parameters};
 pub(crate) use estimate::{fit_psd_size, psd_version, sign_global_blocks};
 pub(crate) use resources::{
-    global_block, guides_resource, keep_imported_resource, legacy_name, pascal_names_resource, path_resources, pixel_aspect_resource, unicode_names_resource,
+    color_sampler_resources, global_block, guides_resource, keep_imported_resource, legacy_name, pascal_names_resource, path_resources, pixel_aspect_resource,
+    unicode_names_resource,
 };
 use smart::{LINK_KEYS, SmartOut, Source, contents_uuid, effects_unchanged, masked, size_from_layer, smart_keys, upsert};
 

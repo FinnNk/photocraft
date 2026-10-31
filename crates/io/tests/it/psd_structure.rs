@@ -773,6 +773,35 @@ fn pixel_aspect_ratio_resource_round_trips_with_the_document() {
     }
 }
 
+/// Color Sampler points (resources 1073 and 1038, as Photoshop 2026 wrote them for points on
+/// pixels (10, 20), (150, 100) and (299, 199)) open on those pixels and save back byte for byte;
+/// a document without points writes neither, and points off the canvas are dropped.
+#[test]
+fn color_sampler_resources_round_trip_with_the_document() {
+    let hex = |s: &str| {
+        let s: String = s.split_whitespace().collect();
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect::<Vec<u8>>()
+    };
+    let ps_1073 = hex("00000003 00000003 000e 41a40000 41280000 ffff 0008 000e 42c90000 43168000 ffff 0008 000e 43478000 4395c000 ffff 0008");
+    let ps_1038 = hex("00000001 00000003 00000290 00000150 ffff 00000c90 000012d0 ffff 000018f0 00002570 ffff");
+    let file = || testgen::merged_only(Version::Psd, ColorMode::Rgb, 8, Compression::Raw, 300, 200);
+    let mut f = file();
+    let (empty, _) = psd_to_document(&f);
+    assert!(document_to_psd(&empty).resources.iter().all(|r| r.id != 1073 && r.id != 1038), "no points, no records");
+    f.resources.push(photocraft_psd::ImageResource::new(1038, ps_1038.clone()));
+    f.resources.push(photocraft_psd::ImageResource::new(1073, ps_1073.clone()));
+    let (d, _) = psd_to_document(&f);
+    assert_eq!(d.color_samplers, [[10.0, 20.0], [150.0, 100.0], [299.0, 199.0]]);
+    assert!(d.metadata.psd_resources.iter().all(|r| r.0 != 1073 && r.0 != 1038), "not also kept raw");
+    let out = document_to_psd(&d);
+    let data = |id| out.resources.iter().filter(|r| r.id == id).map(|r| r.data.clone()).collect::<Vec<_>>();
+    assert_eq!((data(1073), data(1038)), (vec![ps_1073.clone()], vec![ps_1038.clone()]));
+    // Only the legacy record: still read.
+    let mut old = file();
+    old.resources.push(photocraft_psd::ImageResource::new(1038, ps_1038));
+    assert_eq!(psd_to_document(&old).0.color_samplers.len(), 3);
+}
+
 #[test]
 fn stale_index_resources_dropped() {
     let mut f = testgen::small(Version::Psd, Compression::Raw);
